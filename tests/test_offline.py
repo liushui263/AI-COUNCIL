@@ -447,6 +447,37 @@ class OfflineE2E(unittest.TestCase):
         self.assertTrue(rt)
         self.assertGreater(rt[0]["retry_at"], 1e12)
 
+    def test_20_export_docx_and_pdf_page(self):
+        import io, zipfile
+        import xml.etree.ElementTree as ET
+        from backend import export, extract
+        md = ("# 标题\n\n## 共识\n\n- 要点 **加粗** 与 `代码`\n1. 第一\n\n> 引用 <&>\n\n"
+              "| 项 | 价 |\n|---|---|\n| A | 1 |\n\n```\ncode <x>\n```\n段落结尾")
+        data = export.to_docx(md, "T")
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            for n in z.namelist():
+                if n.endswith((".xml", ".rels")):
+                    ET.fromstring(z.read(n))  # 全部是合法 XML
+        text = extract.docx_text(data)
+        for w in ("标题", "要点 加粗 与 代码", "引用 <&>", "code <x>", "段落结尾", "A"):
+            self.assertIn(w, text)
+        page = export.to_html(md, "T")
+        self.assertIn("<strong>加粗</strong>", page)
+        self.assertIn("&lt;&amp;&gt;", page)
+        self.assertIn("<table>", page)
+        body = {"topic": "导出测试", "debate_rounds": 0, "participants": [
+            {"provider": "groq", "model": "a"}, {"provider": "gemini", "model": "b"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        did = r["debate_id"]
+        self.events(did)
+        st, raw = self.call("GET", f"/api/debates/{did}/export.docx")
+        self.assertEqual(st, 200)
+        self.assertIn("导出测试", extract.docx_text(raw))
+        st, raw = self.call("GET", f"/api/debates/{did}/export.html")
+        self.assertEqual(st, 200)
+        self.assertIn("另存为 PDF", raw.decode())
+        self.assert_no_key_leak(raw)
+
     def test_16_quote_trim(self):
         u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])
         self.assertLess(len(u), 3400)

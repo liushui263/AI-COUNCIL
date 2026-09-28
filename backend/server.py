@@ -13,6 +13,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import debate as debate_mod
+from . import export as export_mod
 from . import extract, providers, store
 from .providers import ProviderError
 
@@ -290,15 +291,25 @@ def export_markdown(d: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-@route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/export\.md")
-def export_md(h, body, did):
+@route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/export\.(?P<ext>md|docx|html)")
+def export_file(h, body, did, ext):
+    """导出：md 原文；docx 为 Word；html 为打印页，打开后在浏览器里“另存为 PDF”。"""
     d = _load_or_404(did)
-    data = export_markdown(d).encode("utf-8")
-    safe = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", d["topic"])[:40].strip() or "debate"
-    fname = urllib.parse.quote(f"AI议事厅-{safe}.md")
+    md = export_markdown(d)
+    title = f"AI 议事厅：{d['topic']}"
+    if ext == "md":
+        data, ctype = md.encode("utf-8"), "text/markdown; charset=utf-8"
+    elif ext == "docx":
+        data = export_mod.to_docx(md, title)
+        ctype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    else:
+        data, ctype = export_mod.to_html(md, title).encode("utf-8"), "text/html; charset=utf-8"
     h.send_response(200)
-    h.send_header("Content-Type", "text/markdown; charset=utf-8")
-    h.send_header("Content-Disposition", f"attachment; filename=\"debate-{did[:8]}.md\"; filename*=UTF-8''{fname}")
+    h.send_header("Content-Type", ctype)
+    if ext != "html":
+        safe = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", d["topic"])[:40].strip() or "debate"
+        fname = urllib.parse.quote(f"AI议事厅-{safe}.{ext}")
+        h.send_header("Content-Disposition", f"attachment; filename=\"debate-{did[:8]}.{ext}\"; filename*=UTF-8''{fname}")
     h.send_header("Content-Length", str(len(data)))
     h.end_headers()
     h.wfile.write(data)
