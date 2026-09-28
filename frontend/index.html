@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 议事厅</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2129; --muted: #6b7280; --border: #e3e6ea;
+  --accent: #2563eb; --accent-text: #ffffff; --ok: #16a34a; --fail: #dc2626; --run: #2563eb;
+  --wait: #9ca3af; --warn-bg: #fef9c3; --warn-text: #854d0e; --err-bg: #fee2e2; --err-text: #991b1b;
+  --code-bg: #f1f3f5; --shadow: 0 1px 2px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111318; --panel: #1a1d24; --text: #e6e8eb; --muted: #9aa1ac; --border: #2c313a;
+    --accent: #4f8cff; --accent-text: #0b0d12; --ok: #22c55e; --fail: #f87171; --run: #60a5fa;
+    --wait: #6b7280; --warn-bg: #3b3210; --warn-text: #fde68a; --err-bg: #3b1515; --err-text: #fecaca;
+    --code-bg: #232731; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--border); }
+.bar { max-width: 1040px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 17px; }
+nav { display: flex; gap: 4px; overflow-x: auto; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; white-space: nowrap; }
+nav button.active { background: var(--code-bg); color: var(--text); font-weight: 600; }
+main { max-width: 1040px; margin: 0 auto; padding: 16px; }
+.view { display: none; } .view.active { display: block; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
+h2 { font-size: 17px; margin: 0 0 12px; } h3 { font-size: 15px; margin: 0 0 8px; }
+label.field { display: block; font-weight: 600; margin-bottom: 4px; }
+.hint { color: var(--muted); font-size: 13px; }
+input[type=text], input[type=password], input[type=number], textarea, select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--text); font: inherit; min-width: 0; }
+textarea { resize: vertical; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.btn { display: inline-block; text-decoration: none; font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+.btn.danger { color: var(--fail); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.small { padding: 3px 10px; font-size: 13px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.grow { flex: 1 1 auto; min-width: 0; }
+.stack > * + * { margin-top: 12px; }
+.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.badge.ok { color: var(--ok); border-color: var(--ok); }
+.badge.fail { color: var(--fail); border-color: var(--fail); }
+.badge.free { color: var(--accent); border-color: var(--accent); }
+a { color: var(--accent); }
+.warn { background: var(--warn-bg); color: var(--warn-text); padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+.err { background: var(--err-bg); color: var(--err-text); padding: 8px 12px; border-radius: 6px; font-size: 14px; white-space: pre-wrap; }
+.plist { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.prow { display: grid; grid-template-columns: 26px 150px minmax(0,1fr) minmax(0,.8fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--border); }
+.prow:first-child { border-top: 0; }
+.prow.off .pmodel, .prow.off .prole { opacity: .45; }
+.pname { font-weight: 600; display: flex; flex-direction: column; line-height: 1.3; }
+.pname .badge { align-self: flex-start; margin-top: 2px; }
+.pactions { display: flex; gap: 6px; align-items: center; }
+@media (max-width: 720px) {
+  .prow { grid-template-columns: 26px minmax(0,1fr) auto; }
+  .prow .pmodel, .prow .prole { grid-column: 2 / 4; }
+}
+.toggle { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.stepper button { border: 0; background: var(--code-bg); color: var(--text); width: 32px; height: 32px; font-size: 18px; cursor: pointer; }
+.stepper span { width: 36px; text-align: center; font-weight: 600; }
+details.adv summary { cursor: pointer; color: var(--muted); }
+.round { margin-bottom: 18px; }
+.round-title { font-weight: 700; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
+.card-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--wait); flex: none; }
+.dot.running { background: var(--run); animation: pulse 1s infinite; }
+.dot.ok { background: var(--ok); } .dot.failed { background: var(--fail); }
+@keyframes pulse { 50% { opacity: .3; } }
+.card-meta { color: var(--muted); font-size: 12px; }
+.card-body { font-size: 14px; max-height: 420px; overflow: auto; overflow-wrap: anywhere; }
+.card-body.plain { white-space: pre-wrap; }
+.md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; line-height: 1.35; }
+.md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 15px; }
+.md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
+.md code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; font-size: 90%; }
+.md pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow: auto; }
+.md pre code { background: none; padding: 0; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--border); color: var(--muted); }
+.md table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
+.md hr { border: 0; border-top: 1px solid var(--border); }
+.report { border-color: var(--accent); }
+table.hist { width: 100%; border-collapse: collapse; }
+table.hist th, table.hist td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
+table.hist tr.click { cursor: pointer; } table.hist tr.click:hover td { background: var(--code-bg); }
+.topic-cell { overflow-wrap: anywhere; }
+@media (max-width: 720px) { table.hist .hide-sm { display: none; } }
+.srow { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.srow:first-of-type { border-top: 0; }
+@media (max-width: 720px) { .srow { grid-template-columns: 1fr; } }
+.empty { color: var(--muted); text-align: center; padding: 24px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg);
+  padding: 8px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; max-width: 90vw; }
+.toast.show { opacity: .95; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="brand">AI 议事厅</div>
+    <nav id="tabs">
+      <button data-view="new" class="active">新建辩论</button>
+      <button data-view="live">进行中</button>
+      <button data-view="history">历史</button>
+      <button data-view="settings">设置</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- ====================== 新建辩论 ====================== -->
+  <section id="view-new" class="view active">
+    <div class="panel stack">
+      <div>
+        <label class="field" for="topic">话题 <span class="hint">（必填）</span></label>
+        <textarea id="topic" rows="2" placeholder="例如：两款冰柜 A 和 B 选哪个？"></textarea>
+      </div>
+      <div>
+        <label class="field" for="background">背景材料 <span class="hint">（可选，会原样发给每个参会 AI）</span></label>
+        <textarea id="background" rows="4" placeholder="可粘贴价格对比表、现状描述等"></textarea>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px">
+        <h2 class="grow" style="margin:0">参会者 <span class="hint" id="pcount"></span></h2>
+        <button class="btn small" id="btn-free-lineup">一键勾选免费阵容</button>
+      </div>
+      <div class="plist" id="plist"></div>
+      <p class="hint" style="margin:8px 0 0">勾选 2~8 位。模型可从下拉列表选，也可直接输入；点“＋”可以让同一个 provider 再坐一席（例如换个角色）。</p>
+    </div>
+
+    <div class="panel stack">
+      <h2>轮次与综合</h2>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="blind" checked> 盲写首轮（各方互相看不到）</label>
+      </div>
+      <div class="row">
+        <span>交叉辩论轮数</span>
+        <div class="stepper"><button type="button" id="rounds-minus">−</button><span id="rounds">2</span><button type="button" id="rounds-plus">＋</button></div>
+        <span class="hint">0~5 轮</span>
+      </div>
+      <div>
+        <label class="field" for="synth">综合者</label>
+        <select id="synth"></select>
+      </div>
+      <details class="adv">
+        <summary>高级参数</summary>
+        <div class="row" style="margin-top:10px">
+          <div class="grow"><label class="field" for="max_tokens">max_tokens <span class="hint">200~8000</span></label>
+            <input type="number" id="max_tokens" min="200" max="8000" step="100" value="1500"></div>
+          <div class="grow"><label class="field" for="temperature">temperature <span class="hint">0~2</span></label>
+            <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.7"></div>
+        </div>
+      </details>
+    </div>
+
+    <div class="panel stack">
+      <div id="cost-warn" class="warn" style="display:none">本次辩论将产生 API 费用（走你自己的账户）。</div>
+      <div id="start-err" class="err" style="display:none"></div>
+      <div class="row">
+        <button class="btn primary" id="btn-start" disabled>开始辩论</button>
+        <span class="hint" id="start-reason"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================== 进行中 ====================== -->
+  <section id="view-live" class="view">
+    <div id="live-empty" class="panel empty">当前没有进行中的辩论。去“新建辩论”开始一场吧。</div>
+    <div id="live-wrap" style="display:none">
+      <div class="panel">
+        <div class="row">
+          <div class="grow"><h2 id="live-topic" style="margin:0;overflow-wrap:anywhere"></h2>
+            <div class="hint" id="live-status"></div></div>
+          <button class="btn danger" id="btn-cancel">取消辩论</button>
+          <button class="btn" id="btn-live-synth" style="display:none">生成综合报告</button>
+        </div>
+      </div>
+      <div id="live-rounds"></div>
+      <div id="live-synth"></div>
+    </div>
+  </section>
+
+  <!-- ====================== 历史 ====================== -->
+  <section id="view-history" class="view">
+    <div id="hist-list-wrap" class="panel">
+      <div class="row" style="margin-bottom:8px"><h2 class="grow" style="margin:0">历史辩论</h2><button class="btn small" id="btn-hist-refresh">刷新</button></div>
+      <div id="hist-list"></div>
+    </div>
+    <div id="hist-detail" style="display:none"></div>
+  </section>
+
+  <!-- ====================== 设置 ====================== -->
+  <section id="view-settings" class="view">
+    <div class="panel">
+      <h2>Provider 与 Key</h2>
+      <p class="hint" style="margin-top:0">Key 只保存在本机 <code>.env</code> 文件里，页面永远看不到 key 明文。本应用只会向你选择的 provider 发请求。</p>
+      <div id="settings-list"></div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+// ============================================================ 工具
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "html") el.innerHTML = v;
+    else if (k in el && k !== "list") el[k] = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : document.createTextNode(kid));
+  return el;
+}
+let toastTimer;
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+async function api(method, path, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const res = await fetch(path, opt);
+  let data = null;
+  try { data = await res.json(); } catch (_) { /* 非 JSON */ }
+  if (!res.ok) throw new Error((data && data.error) || `请求失败（HTTP ${res.status}）`);
+  return data;
+}
+function fmtTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso); if (isNaN(d)) return iso;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+const STATUS_TEXT = { running: "进行中", done: "已完成", partial: "部分完成", cancelled: "已取消", interrupted: "已中断" };
+const MSG_STATUS = { pending: "等待中", running: "生成中", ok: "已完成", failed: "失败" };
+const DEFAULT_ROLE = "中立专家";
+
+// ============================================================ 迷你 Markdown 渲染（先转义，再加格式，安全）
+function mdInline(s) {
+  const codes = [];
+  s = s.replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = esc(s);
+  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/__(.+?)__/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>");
+  s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${esc(codes[+i])}</code>`);
+}
+function md(src) {
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  let out = "", i = 0;
+  const isTableSep = (l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => mdInline(c.trim()));
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out += `<pre><code>${esc(buf.join("\n"))}</code></pre>`; continue;
+    }
+    let m;
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) { const n = Math.min(m[1].length, 4); out += `<h${n}>${mdInline(m[2])}</h${n}>`; i++; continue; }
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) { out += "<hr>"; i++; continue; }
+    if (line.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const head = cells(line); i += 2; let body = "";
+      while (i < lines.length && lines[i].includes("|") && lines[i].trim()) { body += "<tr>" + cells(lines[i]).map((c) => `<td>${c}</td>`).join("") + "</tr>"; i++; }
+      out += `<table><thead><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`; continue;
+    }
+    if (/^\s*>/.test(line)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out += `<blockquote>${md(buf.join("\n"))}</blockquote>`; continue;
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line); const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) {
+        let item = lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, "");
+        while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) item += " " + lines[i++].trim();
+        items.push(`<li>${mdInline(item)}</li>`);
+      }
+      out += ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`; continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    const buf = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*```|\s*>|\s*([-*+]|\d+[.)])\s+)/.test(lines[i])) buf.push(mdInline(lines[i++]));
+    out += `<p>${buf.join("<br>")}</p>`;
+  }
+  return out;
+}
+
+// ============================================================ 视图切换
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  if (name === "history") { loadHistory(); }
+  if (name === "settings") { loadProviders().then(renderSettings); }
+  if (name === "new") { loadProviders().then(renderParticipants); }
+  window.scrollTo(0, 0);
+}
+$("#tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showView(b.dataset.view); });
+
+// ============================================================ Providers
+let PROVIDERS = [];
+const byId = (id) => PROVIDERS.find((p) => p.id === id);
+async function loadProviders() {
+  try { PROVIDERS = await api("GET", "/api/providers"); } catch (e) { toast(e.message); }
+  return PROVIDERS;
+}
+const keyOk = (p) => !p.need_key || p.key_configured;
+
+// ============================================================ 新建辩论
+// seats：参会席位，同一个 provider 可以有多个席位
+let seats = null;
+let debateRounds = 2;
+
+function initSeats() {
+  seats = PROVIDERS.map((p) => ({ provider: p.id, model: p.default_model, role: "", on: false }));
+}
+function renderParticipants() {
+  if (!seats) initSeats();
+  const list = $("#plist"); list.innerHTML = "";
+  seats.forEach((s, idx) => {
+    const p = byId(s.provider); if (!p) return;
+    const dlId = `dl-${p.id}`;
+    if (!document.getElementById(dlId)) document.body.append(h("datalist", { id: dlId }));
+    const dl = document.getElementById(dlId); dl.innerHTML = "";
+    const models = p.models.length ? p.models : [p.default_model];
+    models.forEach((m) => dl.append(h("option", { value: m })));
+    const dup = seats.slice(0, idx).filter((x) => x.provider === s.provider).length;
+    let badge;
+    if (!p.need_key) badge = h("span", { class: "badge ok" }, p.key_configured ? "已配置 key" : "无需 key");
+    else if (p.key_configured) badge = h("span", { class: "badge ok" }, "已配置 key");
+    else badge = h("a", { href: "#", class: "badge fail", onclick: (e) => { e.preventDefault(); showView("settings"); } }, "未配置 key，去设置页配置");
+    const row = h("div", { class: "prow" + (s.on ? "" : " off") },
+      h("input", { type: "checkbox", checked: s.on, "aria-label": `选择 ${p.name}`, onchange: (e) => {
+        if (e.target.checked && !keyOk(p)) { e.target.checked = false; toast(`${p.name} 需要 key，请先到设置页配置`); return; }
+        s.on = e.target.checked; renderParticipants(); } }),
+      h("div", { class: "pname" }, p.name + (dup ? ` #${dup + 1}` : ""), badge),
+      h("input", { type: "text", class: "pmodel", list: dlId, value: s.model, placeholder: "模型名", "aria-label": "模型",
+        oninput: (e) => { s.model = e.target.value; updateSynth(); validateForm(); }, onchange: () => updateSynth() }),
+      h("input", { type: "text", class: "prole", value: s.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色",
+        oninput: (e) => { s.role = e.target.value; } }),
+      h("div", { class: "pactions" },
+        h("button", { class: "btn small", title: "再加一个席位", onclick: () => { seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p) }); renderParticipants(); } }, "＋"),
+        dup ? h("button", { class: "btn small", title: "移除这个席位", onclick: () => { seats.splice(idx, 1); renderParticipants(); } }, "－") : null)
+    );
+    list.append(row);
+  });
+  updateSynth(); validateForm();
+}
+function chosen() { return seats ? seats.filter((s) => s.on) : []; }
+function updateSynth() {
+  const sel = $("#synth"); const prev = sel.value;
+  sel.innerHTML = "";
+  const c = chosen(); const seen = new Set();
+  c.forEach((s) => {
+    const val = `${s.provider}|${s.model.trim() || byId(s.provider).default_model}`;
+    if (seen.has(val)) return; seen.add(val);
+    sel.append(h("option", { value: val }, `${byId(s.provider).name} / ${val.split("|")[1]}`));
+  });
+  if (!c.length) sel.append(h("option", { value: "" }, "（先勾选参会者，默认=第一个参会者）"));
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+function validateForm() {
+  const c = chosen();
+  $("#pcount").textContent = `已选 ${c.length} 位`;
+  let reason = "";
+  if (!$("#topic").value.trim()) reason = "请填写话题";
+  else if (c.length < 2) reason = "至少勾选 2 位参会者";
+  else if (c.length > 8) reason = "最多 8 位参会者";
+  else if (c.some((s) => !keyOk(byId(s.provider)))) reason = "有参会者的 key 未配置";
+  else {
+    const mt = +$("#max_tokens").value, t = +$("#temperature").value;
+    if (!(mt >= 200 && mt <= 8000)) reason = "max_tokens 需在 200~8000";
+    else if (!(t >= 0 && t <= 2)) reason = "temperature 需在 0~2";
+  }
+  $("#btn-start").disabled = !!reason;
+  $("#start-reason").textContent = reason;
+  const paid = c.some((s) => { const p = byId(s.provider); return !p.free || (p.id === "openrouter" && !s.model.trim().endsWith(":free")); });
+  $("#cost-warn").style.display = paid ? "block" : "none";
+  return !reason;
+}
+function applyFreeLineup() {
+  if (!seats) initSeats();
+  seats.forEach((s) => (s.on = false));
+  const picks = ["gemini", "groq", "openrouter"].filter((id) => keyOk(byId(id)));
+  picks.forEach((id) => {
+    const s = seats.find((x) => x.provider === id);
+    s.on = true;
+    if (id === "openrouter") s.model = byId(id).default_model;
+  });
+  if (picks.length < 2) {
+    // 免费 key 不够两家：用免 key 的 Pollinations 补足席位（换不同角色）
+    const roles = ["正方：支持派", "反方：质疑派", "风险派"];
+    let polls = seats.filter((x) => x.provider === "pollinations");
+    while (polls.length < 3 - picks.length) {
+      const i = seats.indexOf(polls[polls.length - 1]);
+      seats.splice(i + 1, 0, { provider: "pollinations", model: byId("pollinations").default_model, role: "", on: false });
+      polls = seats.filter((x) => x.provider === "pollinations");
+    }
+    polls.slice(0, 3 - picks.length).forEach((s, k) => { s.on = true; if (!s.role) s.role = roles[k]; });
+    toast(picks.length ? "免费 key 不足两家，已用 Pollinations 补足" : "尚未配置免费 key，已用免 key 的 Pollinations 组队");
+  }
+  renderParticipants();
+}
+$("#btn-free-lineup").onclick = applyFreeLineup;
+$("#topic").addEventListener("input", validateForm);
+$("#max_tokens").addEventListener("input", validateForm);
+$("#temperature").addEventListener("input", validateForm);
+function setRounds(n) { debateRounds = Math.max(0, Math.min(5, n)); $("#rounds").textContent = debateRounds; }
+$("#rounds-minus").onclick = () => setRounds(debateRounds - 1);
+$("#rounds-plus").onclick = () => setRounds(debateRounds + 1);
+
+$("#btn-start").onclick = async () => {
+  if (!validateForm()) return;
+  const [sp, sm] = ($("#synth").value || "").split("|");
+  const body = {
+    topic: $("#topic").value.trim(),
+    background: $("#background").value,
+    participants: chosen().map((s) => ({ provider: s.provider, model: s.model.trim(), role: s.role.trim() })),
+    blind_round: $("#blind").checked,
+    debate_rounds: debateRounds,
+    synthesis: sp ? { provider: sp, model: sm } : null,
+    max_tokens: +$("#max_tokens").value,
+    temperature: +$("#temperature").value,
+  };
+  const errBox = $("#start-err"); errBox.style.display = "none";
+  $("#btn-start").disabled = true;
+  try {
+    const { debate_id } = await api("POST", "/api/debates", body);
+    startLive(debate_id);
+  } catch (e) {
+    errBox.textContent = e.message; errBox.style.display = "block";
+  } finally { validateForm(); }
+};
+
+// ============================================================ 进行中（SSE）
+let live = null; // { id, es, debate, cards: Map, done }
+
+function cardKey(r, pid) { return `${r}::${pid}`; }
+function participantLabel(m) { const p = byId(m.provider); return (p ? p.name : m.provider) + (m.participant && m.participant.includes("#") ? " #" + m.participant.split("#")[1] : ""); }
+
+function makeCard(m, status) {
+  const dot = h("span", { class: `dot ${status}` });
+  const st = h("span", { class: "card-meta" }, MSG_STATUS[status] || status);
+  const body = h("div", { class: "card-body plain" });
+  const usage = h("div", { class: "card-meta" });
+  const card = h("div", { class: "card" },
+    h("div", { class: "card-head" }, dot, h("strong", {}, participantLabel(m)), st),
+    h("div", { class: "card-meta", style: "margin-bottom:6px" }, `${m.model} · ${m.role || DEFAULT_ROLE}`),
+    body, usage);
+  return { card, dot, st, body, usage, text: "" };
+}
+function setCardStatus(c, status, extra) {
+  c.dot.className = `dot ${status}`;
+  c.st.textContent = (MSG_STATUS[status] || status) + (extra ? `：${extra}` : "");
+}
+function renderUsage(u) { return u ? `输入 ${u.prompt_tokens} / 输出 ${u.completion_tokens} tokens` : ""; }
+
+function startLive(id) {
+  if (live && live.es) live.es.close();
+  live = { id, es: null, debate: null, cards: new Map(), rounds: new Map(), synth: null, done: false };
+  $("#live-rounds").innerHTML = ""; $("#live-synth").innerHTML = "";
+  $("#live-empty").style.display = "none"; $("#live-wrap").style.display = "block";
+  $("#btn-cancel").style.display = ""; $("#btn-cancel").disabled = false;
+  $("#btn-live-synth").style.display = "none";
+  showView("live");
+  api("GET", `/api/debates/${id}`).then((d) => {
+    live.debate = d;
+    $("#live-topic").textContent = d.topic;
+    $("#live-status").textContent = STATUS_TEXT[d.status] || d.status;
+    connectEvents(id);
+  }).catch((e) => toast(e.message));
+}
+function ensureRound(r, title) {
+  if (live.rounds.has(r)) return live.rounds.get(r);
+  const cards = h("div", { class: "cards" });
+  const box = h("div", { class: "round" }, h("div", { class: "round-title" }, title || `第 ${r} 轮`), cards);
+  $("#live-rounds").append(box);
+  const parts = live.debate.config.participants;
+  parts.forEach((p) => {
+    const c = makeCard({ participant: p.id, provider: p.provider, model: p.model, role: p.role }, "pending");
+    live.cards.set(cardKey(r, p.id), c); cards.append(c.card);
+  });
+  live.rounds.set(r, box);
+  return box;
+}
+function ensureSynth(by) {
+  if (live.synth) return live.synth;
+  const dot = h("span", { class: "dot running" });
+  const st = h("span", { class: "card-meta" }, "生成中");
+  const body = h("div", { class: "card-body plain", style: "max-height:none" });
+  const card = h("div", { class: "panel report" },
+    h("div", { class: "card-head" }, dot, h("h2", { style: "margin:0" }, "综合报告"), st),
+    h("div", { class: "card-meta", style: "margin-bottom:8px" }, `综合者：${by || ""}`), body);
+  $("#live-synth").innerHTML = ""; $("#live-synth").append(card);
+  live.synth = { card, dot, st, body, text: "" };
+  return live.synth;
+}
+function connectEvents(id) {
+  const es = new EventSource(`/api/debates/${id}/events`);
+  live.es = es;
+  const on = (name, fn) => es.addEventListener(name, (ev) => { if (!live || live.id !== id) return; let d = {}; try { d = JSON.parse(ev.data); } catch (_) {} fn(d); });
+  on("debate_started", () => { $("#live-status").textContent = "进行中"; });
+  on("round_started", (d) => ensureRound(d.round, d.title));
+  on("participant_started", (d) => { ensureRound(d.round); const c = live.cards.get(cardKey(d.round, d.participant)); if (c) { c.text = ""; c.body.textContent = ""; setCardStatus(c, "running"); } });
+  on("participant_retry", (d) => { const c = live.cards.get(cardKey(d.round, d.participant)); if (c) { c.text = ""; c.body.textContent = ""; setCardStatus(c, "running", d.note); } });
+  on("token", (d) => {
+    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
+    const nearBottom = c.body.scrollHeight - c.body.scrollTop - c.body.clientHeight < 40;
+    c.text += d.delta; c.body.textContent = c.text;
+    if (nearBottom) c.body.scrollTop = c.body.scrollHeight;
+  });
+  on("message_done", (d) => {
+    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
+    c.text = d.text; c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(d.text);
+    c.usage.textContent = renderUsage(d.usage); setCardStatus(c, "ok");
+  });
+  on("message_failed", (d) => {
+    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
+    setCardStatus(c, "failed"); c.body.innerHTML = ""; c.body.append(h("div", { class: "err" }, d.error || "失败"));
+  });
+  on("round_done", () => {});
+  on("synthesis_started", (d) => { live.synth = null; ensureSynth(d.by); $("#live-status").textContent = "正在生成综合报告…"; });
+  on("synthesis_retry", (d) => { const s = ensureSynth(); s.text = ""; s.body.textContent = ""; s.st.textContent = `生成中：${d.note}`; });
+  on("synthesis_token", (d) => { const s = ensureSynth(); s.text += d.delta; s.body.textContent = s.text; });
+  on("synthesis_done", (d) => { const s = ensureSynth(d.by); s.body.classList.remove("plain"); s.body.classList.add("md"); s.body.innerHTML = md(d.text); s.dot.className = "dot ok"; s.st.textContent = "已完成"; });
+  on("synthesis_failed", (d) => { const s = ensureSynth(d.by); s.dot.className = "dot failed"; s.st.textContent = "失败"; s.body.innerHTML = ""; s.body.append(h("div", { class: "err" }, d.error)); });
+  const finish = (status) => {
+    es.close(); live.done = true;
+    $("#btn-cancel").style.display = "none";
+    $("#live-status").textContent = STATUS_TEXT[status] || status || "已结束";
+    const synthOk = live.synth && live.synth.dot.classList.contains("ok");
+    $("#btn-live-synth").style.display = synthOk ? "none" : "";
+    $("#btn-live-synth").textContent = "生成综合报告";
+    if (synthOk) { toast("辩论完成，已跳到综合报告"); setTimeout(() => { if (live && live.id === id) openDetail(id); }, 900); }
+  };
+  on("debate_done", (d) => {
+    if (d.archived) { es.close(); openDetail(id); return; }
+    finish(d.status);
+  });
+  on("debate_cancelled", () => { toast("辩论已取消，已完成的轮次已保留"); finish("cancelled"); });
+  es.onerror = () => { if (live && live.done) es.close(); /* 否则 EventSource 自动重连，服务端按 Last-Event-ID 续传 */ };
+}
+$("#btn-cancel").onclick = async () => {
+  if (!live) return;
+  $("#btn-cancel").disabled = true;
+  try { const r = await api("POST", `/api/debates/${live.id}/cancel`); toast(r.note || "已请求取消"); $("#live-status").textContent = "正在取消：当前轮完成后停止…"; }
+  catch (e) { toast(e.message); $("#btn-cancel").disabled = false; }
+};
+$("#btn-live-synth").onclick = () => live && runSynthesis(live.id);
+
+async function runSynthesis(id) {
+  try {
+    await api("POST", `/api/debates/${id}/synthesize`);
+    // 复用进行中视图观看综合过程
+    if (!live || live.id !== id || !live.debate) { startLive(id); return; }
+    live.done = false; live.synth = null; $("#live-synth").innerHTML = "";
+    $("#btn-live-synth").style.display = "none";
+    showView("live");
+    connectEvents(id);
+  } catch (e) { toast(e.message); }
+}
+
+// ============================================================ 历史
+async function loadHistory() {
+  $("#hist-detail").style.display = "none"; $("#hist-list-wrap").style.display = "block";
+  const box = $("#hist-list"); box.innerHTML = '<div class="empty">加载中…</div>';
+  let items = [];
+  try { items = await api("GET", "/api/debates"); } catch (e) { box.innerHTML = ""; box.append(h("div", { class: "err" }, e.message)); return; }
+  box.innerHTML = "";
+  if (!items.length) { box.innerHTML = '<div class="empty">还没有辩论记录</div>'; return; }
+  const tbody = h("tbody");
+  items.forEach((it) => tbody.append(h("tr", { class: "click", onclick: () => openDetail(it.id) },
+    h("td", { class: "topic-cell" }, it.topic),
+    h("td", { class: "hide-sm" }, fmtTime(it.created_at)),
+    h("td", { class: "hide-sm" }, `${it.participants} 位`),
+    h("td", {}, h("span", { class: "badge" + (it.status === "done" ? " ok" : it.status === "running" ? " free" : "") }, STATUS_TEXT[it.status] || it.status)))));
+  box.append(h("table", { class: "hist" }, h("thead", {}, h("tr", {}, h("th", {}, "话题"), h("th", { class: "hide-sm" }, "时间"), h("th", { class: "hide-sm" }, "参会者"), h("th", {}, "状态"))), tbody));
+}
+$("#btn-hist-refresh").onclick = loadHistory;
+
+async function openDetail(id) {
+  let d;
+  try { d = await api("GET", `/api/debates/${id}`); } catch (e) { toast(e.message); return; }
+  if (!PROVIDERS.length) await loadProviders();
+  showViewOnly("history");
+  $("#hist-list-wrap").style.display = "none";
+  const box = $("#hist-detail"); box.innerHTML = ""; box.style.display = "block";
+  const cfg = d.config, u = d.usage || {};
+  const actions = h("div", { class: "row" },
+    h("button", { class: "btn", onclick: loadHistory }, "← 返回列表"),
+    d.active ? h("button", { class: "btn primary", onclick: () => startLive(id) }, "观看进行中") : null,
+    h("a", { class: "btn", href: `/api/debates/${id}/export.md`, download: "", style: "text-decoration:none" }, "导出 .md"),
+    !d.active ? h("button", { class: "btn", onclick: () => runSynthesis(id) }, d.synthesis && d.synthesis.status === "ok" ? "重新综合" : "生成综合报告") : null,
+    !d.active ? h("button", { class: "btn danger", onclick: async () => {
+      if (!confirm("确定删除这场辩论的存档吗？此操作不可恢复。")) return;
+      try { await api("DELETE", `/api/debates/${id}`); toast("已删除"); loadHistory(); } catch (e) { toast(e.message); }
+    } }, "删除") : null);
+  box.append(h("div", { class: "panel stack" },
+    actions,
+    h("h2", { style: "margin:0;overflow-wrap:anywhere" }, d.topic),
+    h("div", { class: "hint" },
+      `${fmtTime(d.created_at)} · ${STATUS_TEXT[d.status] || d.status} · ${cfg.participants.length} 位参会者 · ${cfg.blind_round ? "盲写首轮" : "公开首轮"} + ${cfg.debate_rounds} 轮交叉辩论 · 综合者 ${cfg.synthesis.provider}/${cfg.synthesis.model}`),
+    h("div", { class: "hint" }, `用量：${u.calls || 0} 次调用，输入 ${u.prompt_tokens || 0} tokens，输出 ${u.completion_tokens || 0} tokens`),
+    d.background && d.background.trim() ? h("details", {}, h("summary", {}, "背景材料"), h("div", { class: "card-body plain", style: "max-height:none;margin-top:6px" }, d.background)) : null));
+
+  const syn = d.synthesis;
+  const synBox = h("div", { class: "panel report" }, h("h2", {}, "综合报告"));
+  if (syn && syn.status === "ok") {
+    synBox.append(h("div", { class: "card-meta", style: "margin-bottom:8px" }, `综合者：${syn.by}${syn.usage ? " · " + renderUsage(syn.usage) : ""}`), h("div", { class: "md", html: md(syn.text) }));
+  } else if (syn && syn.status === "failed") synBox.append(h("div", { class: "err" }, `综合失败：${syn.error || ""}`));
+  else synBox.append(h("div", { class: "hint" }, "尚未生成综合报告。"));
+  box.append(synBox);
+
+  (d.rounds || []).forEach((rnd) => {
+    const cards = h("div", { class: "cards" });
+    rnd.messages.forEach((m) => {
+      const c = makeCard(m, m.status);
+      if (m.status === "ok") { c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(m.text); }
+      else if (m.status === "failed") c.body.append(h("div", { class: "err" }, m.error || "失败"));
+      c.usage.textContent = renderUsage(m.usage);
+      cards.append(c.card);
+    });
+    const title = rnd.index === 0 ? (cfg.blind_round ? "第 0 轮：盲写" : "第 0 轮：公开首轮") : `第 ${rnd.index} 轮：交叉辩论`;
+    box.append(h("details", { class: "panel", open: false }, h("summary", { style: "cursor:pointer;font-weight:700" }, title), h("div", { style: "margin-top:10px" }, cards)));
+  });
+}
+function showViewOnly(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  window.scrollTo(0, 0);
+}
+
+// ============================================================ 设置
+function renderSettings() {
+  const box = $("#settings-list"); box.innerHTML = "";
+  PROVIDERS.forEach((p) => {
+    const keyInput = h("input", { type: "password", placeholder: p.key_configured ? "已配置（输入新 key 可替换）" : (p.need_key ? "粘贴 API key" : "可选：粘贴 key 提高额度"), autocomplete: "off", spellcheck: false });
+    const status = p.key_configured ? h("span", { class: "badge ok" }, "已配置")
+      : p.need_key ? h("span", { class: "badge fail" }, "未配置") : h("span", { class: "badge" }, "无需 key");
+    const modelsInfo = h("span", { class: "hint" }, p.models.length ? `已缓存 ${p.models.length} 个模型（${fmtTime(p.models_updated_at)}）` : "尚未刷新模型列表，使用默认模型 " + p.default_model);
+    const refreshBtn = h("button", { class: "btn small", disabled: p.need_key && !p.key_configured, onclick: async () => {
+      refreshBtn.disabled = true; refreshBtn.textContent = "刷新中…";
+      try { const r = await api("POST", `/api/providers/${p.id}/models/refresh`); toast(`${p.name}：获取到 ${r.models.length} 个模型`); await loadProviders(); seatsSyncDefaults(); renderSettings(); }
+      catch (e) { toast(e.message); refreshBtn.disabled = false; refreshBtn.textContent = "刷新模型列表"; }
+    } }, "刷新模型列表");
+    box.append(h("div", { class: "srow" },
+      h("div", {}, h("div", { style: "font-weight:700" }, p.name, " ", p.free ? h("span", { class: "badge free" }, "免费") : h("span", { class: "badge" }, "付费")),
+        h("div", { style: "margin-top:4px" }, status)),
+      h("div", { class: "stack" },
+        h("div", { class: "hint" }, p.free_tier_desc, " · ", h("a", { href: p.key_url, target: "_blank", rel: "noopener noreferrer" }, "获取 key")),
+        h("div", { class: "row" }, h("div", { class: "grow" }, keyInput),
+          h("button", { class: "btn small primary", onclick: async () => {
+            const k = keyInput.value.trim(); if (!k) { toast("请先粘贴 key"); return; }
+            try { await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = ""; toast(`${p.name} key 已保存到本机 .env`); await loadProviders(); renderSettings(); }
+            catch (e) { toast(e.message); }
+          } }, "保存"),
+          p.key_configured ? h("button", { class: "btn small danger", onclick: async () => {
+            if (!confirm(`删除 ${p.name} 的 key？`)) return;
+            try { await api("DELETE", `/api/providers/${p.id}/key`); toast("已删除"); await loadProviders(); renderSettings(); } catch (e) { toast(e.message); }
+          } }, "删除") : null),
+        h("div", { class: "row" }, refreshBtn, modelsInfo))));
+  });
+  box.append(h("div", { class: "srow" }, h("div", { style: "font-weight:700" }, "免费档默认阵容"),
+    h("div", { class: "row" }, h("span", { class: "hint grow" }, "Gemini + Groq + OpenRouter（:free 模型），零成本开箱即用。"),
+      h("button", { class: "btn small", onclick: () => { showView("new"); setTimeout(applyFreeLineup, 50); } }, "一键勾选并去新建"))));
+}
+// 刷新模型列表后：还在用旧默认模型的席位跟着换成新的默认模型（主要是 OpenRouter 的 :free 模型）
+function seatsSyncDefaults() {
+  if (!seats) return;
+  seats.forEach((s) => { const p = byId(s.provider); if (p && !s.on && p.models.length && !p.models.includes(s.model)) s.model = p.default_model; });
+}
+
+// ============================================================ 启动
+(async function boot() {
+  await loadProviders();
+  renderParticipants();
+  // 若有进行中的辩论，“进行中”页可直接观看
+  try {
+    const items = await api("GET", "/api/debates");
+    const running = items.find((x) => x.status === "running");
+    if (running) { const d = await api("GET", `/api/debates/${running.id}`); if (d.active) { startLive(running.id); showView("new"); toast("有一场辩论正在进行，可在“进行中”查看"); } }
+  } catch (_) { /* 忽略 */ }
+})();
+</script>
+</body>
+</html>
