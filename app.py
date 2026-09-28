@@ -12,7 +12,7 @@ import webbrowser
 if sys.version_info < (3, 9):
     sys.exit("需要 Python 3.9 或更高版本")
 
-from backend import server, store  # noqa: E402
+from backend import providers, server, store  # noqa: E402
 
 HOST = "127.0.0.1"  # 默认只监听本机
 DEFAULT_PORT = 8000
@@ -68,6 +68,8 @@ def main() -> None:
     n = 0 if other_running else store.mark_interrupted_on_startup()
     if n:
         logging.info("有 %d 场上次未完成的辩论，已标记为 interrupted", n)
+
+    providers.refresh_configured_in_background()
 
     url = f"http://{HOST}:{port}"
     print(f"AI 议事厅已启动：{url}  （Ctrl+C 退出）", flush=True)

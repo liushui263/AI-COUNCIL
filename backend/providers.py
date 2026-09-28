@@ -13,6 +13,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import re
 import ssl
 import time
 import urllib.error
@@ -48,7 +49,8 @@ PROVIDERS = [
         "id": "gemini", "name": "Gemini", "kind": "gemini", "env": "GEMINI_API_KEY",
         "need_key": True,
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "default_model": "gemini-2.5-flash",
+        # 用官方的 latest 别名，模型换代时自动跟随；刷新列表后会按规则重选
+        "default_model": "gemini-flash-latest",
         "free": True,
         "free_tier_desc": "免费档：Flash 系列免费，无需绑卡；RPM/RPD 按模型不同（以 AI Studio 显示为准）",
         "key_url": "https://aistudio.google.com/app/apikey",
@@ -57,7 +59,8 @@ PROVIDERS = [
         "id": "groq", "name": "Groq", "kind": "openai", "env": "GROQ_API_KEY",
         "need_key": True,
         "base_url": "https://api.groq.com/openai/v1",
-        "default_model": "llama-3.3-70b-versatile",
+        # TODO(规格待确认)：Groq 模型换得很快，保存 key 后会自动刷新列表并重选
+        "default_model": "openai/gpt-oss-120b",
         "free": True,
         "free_tier_desc": "免费档：约 30 RPM + 每日 token 上限（分模型），无需绑卡",
         "key_url": "https://console.groq.com/keys",
@@ -66,23 +69,24 @@ PROVIDERS = [
         "id": "openrouter", "name": "OpenRouter", "kind": "openai", "env": "OPENROUTER_API_KEY",
         "need_key": True,
         "base_url": "https://openrouter.ai/api/v1",
-        # 规格：动态取 /models 里第一个 :free 模型；未刷新前先给一个常见的免费模型作占位
-        # TODO(规格待确认)：占位模型名可能下线，刷新模型列表后会被替换
-        "default_model": "deepseek/deepseek-chat-v3-0324:free",
+        # 规格：动态取 /models 里第一个 :free 模型；保存 key 后会自动刷新列表
+        # TODO(规格待确认)：刷新前的占位值，指望 OpenRouter 的免费路由，不可用时刷新列表即可
+        "default_model": "openrouter/free",
         "free": True,
         "free_tier_desc": "免费：模型名加 :free 后缀；未充值账户 50 次/天、20 次/分钟；一次性充值 $10 起永久解锁 1000 次/天",
         "key_url": "https://openrouter.ai/keys",
     },
     {
         "id": "pollinations", "name": "Pollinations", "kind": "openai", "env": "POLLINATIONS_API_KEY",
-        "need_key": False,
+        # 2026-09 起新端点要求 key（报 401 A valid API key is required），key 在 enter.pollinations.ai 免费领
+        "need_key": True,
         "base_url": "https://gen.pollinations.ai/v1",
         # 旧端点保留为备用：新端点失败（非鉴权错误）时自动切换
         "fallback_chat_url": "https://text.pollinations.ai/openai",
         "fallback_models_url": "https://text.pollinations.ai/models",
         "default_model": "openai",
         "free": True,
-        "free_tier_desc": "免费；无 key 可用，有 key 额度更高（在 enter.pollinations.ai 免费领）",
+        "free_tier_desc": "免费；需要在 enter.pollinations.ai 免费领 key",
         "key_url": "https://enter.pollinations.ai",
     },
     {
@@ -148,16 +152,54 @@ def key_ok(provider_id: str) -> bool:
     return (not p["need_key"]) or key_configured(provider_id)
 
 
+# 模型会频繁上下线，内置默认值很快过期；刷新过模型列表后按下面的规则从列表里挑一个。
+# 排除非对话模型（语音、图像、嵌入、审核等）
+_NON_CHAT = ("embed", "whisper", "tts", "audio", "image", "imagen", "veo", "vision-preview", "guard", "moderation",
+             "transcribe", "realtime", "search", "dall-e", "sora", "live", "robotics", "computer-use", "aqa",
+             "learnlm", "playai", "orpheus", "prompt-guard", "safeguard", "codex", "instruct")
+# 各家偏好：按顺序匹配关键字，命中的第一组里取“版本号最大”的那个
+_PREFER = {
+    "gemini": [("flash",), ("pro",)],
+    "groq": [("gpt-oss-120b",), ("llama", "70b"), ("gpt-oss",), ("llama",), ("qwen",), ("kimi",)],
+    "deepseek": [("deepseek-chat",), ("chat",)],
+    "openai": [("gpt", "mini"), ("gpt",)],
+    "anthropic": [("haiku",), ("sonnet",)],
+    "xai": [("grok", "mini"), ("grok", "fast"), ("grok",)],
+    "pollinations": [("openai",), ("mistral",)],
+}
+_AVOID = ("lite", "nano", "preview", "exp", "thinking", "latest-", "-8b", "tuning", "deep-research")
+
+
+def _version_key(name: str):
+    return [int(x) for x in re.findall(r"\d+", name)]
+
+
+def pick_default(provider_id: str, models: list) -> str | None:
+    """从模型列表里挑一个适合对话的默认模型；挑不出返回 None。"""
+    chat = [m for m in models if not any(bad in m.lower() for bad in _NON_CHAT)]
+    if not chat:
+        return None
+    if provider_id == "openrouter":
+        free = [m for m in chat if m.endswith(":free")]
+        return free[0] if free else None  # 没有免费模型就不替用户选付费的
+    for keys in _PREFER.get(provider_id, []):
+        hits = [m for m in chat if all(k in m.lower() for k in keys)]
+        good = [m for m in hits if not any(a in m.lower() for a in _AVOID)] or hits
+        if good:
+            return max(good, key=_version_key)
+    return chat[0]
+
+
 def default_model(provider_id: str) -> str:
-    """优先用刷新得到的模型列表推断默认模型，否则用内置初始值。"""
+    """优先用刷新得到的模型列表：内置默认值还在列表里就用它，否则按规则从列表里挑。"""
     p = get_provider(provider_id)
     cached = store.cached_models(provider_id) or {}
     models = cached.get("models") or []
-    if provider_id == "openrouter":
-        for m in models:
-            if m.endswith(":free"):
-                return m
-    return p["default_model"]
+    if provider_id == "openrouter" and models:
+        return pick_default(provider_id, models) or p["default_model"]
+    if not models or p["default_model"] in models:
+        return p["default_model"]
+    return pick_default(provider_id, models) or p["default_model"]
 
 
 def public_list() -> list:
@@ -238,6 +280,9 @@ def _classify_http_error(status: int, body: bytes, key: str) -> ProviderError:
         return ProviderError(f"{status} key 无效或额度不足，请检查设置页（{detail}）", retryable=False, status=status)
     if status == 402:
         return ProviderError(f"402 余额不足：{detail}", retryable=False, status=status)
+    if status == 404:
+        return ProviderError(f"404 {detail}（模型可能已下线或无权使用：到设置页点「刷新模型列表」，或换一个模型）",
+                             retryable=False, status=status)
     if status >= 500:
         return ProviderError(f"{status} 服务端错误：{detail}", retryable=True, status=status)
     return ProviderError(f"{status} {detail}", retryable=False, status=status)
@@ -627,3 +672,28 @@ def list_models(provider_id: str) -> list:
 def refresh_models(provider_id: str) -> dict:
     models = list_models(provider_id)
     return store.cache_models(provider_id, models)
+
+
+def refresh_configured_in_background(max_age_hours: float = 24) -> None:
+    """启动时：为已配置 key、模型缓存缺失或过期的 provider 在后台刷新模型列表。"""
+    import threading
+    from datetime import datetime
+
+    def stale(pid):
+        entry = store.cached_models(pid) or {}
+        try:
+            age = datetime.now().astimezone() - datetime.fromisoformat(entry["updated_at"])
+            return age.total_seconds() > max_age_hours * 3600
+        except (KeyError, TypeError, ValueError):
+            return True
+
+    def work():
+        for p in PROVIDERS:
+            if key_configured(p["id"]) and stale(p["id"]):
+                try:
+                    n = len(refresh_models(p["id"])["models"])
+                    log.info("已刷新 %s 的模型列表（%d 个），默认模型：%s", p["name"], n, default_model(p["id"]))
+                except ProviderError as e:
+                    log.warning("刷新 %s 的模型列表失败：%s", p["name"], e.msg)
+
+    threading.Thread(target=work, daemon=True, name="refresh-models").start()

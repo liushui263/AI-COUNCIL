@@ -340,10 +340,12 @@ let seats = null;
 let debateRounds = 2;
 
 function initSeats() {
-  seats = PROVIDERS.map((p) => ({ provider: p.id, model: p.default_model, role: "", on: false }));
+  // auto=true 表示模型是系统给的默认值（没被手动改过），刷新模型列表后会跟着更新
+  seats = PROVIDERS.map((p) => ({ provider: p.id, model: p.default_model, role: "", on: false, auto: true }));
 }
 function renderParticipants() {
   if (!seats) initSeats();
+  seatsSyncDefaults();
   const list = $("#plist"); list.innerHTML = "";
   seats.forEach((s, idx) => {
     const p = byId(s.provider); if (!p) return;
@@ -363,11 +365,11 @@ function renderParticipants() {
         s.on = e.target.checked; renderParticipants(); } }),
       h("div", { class: "pname" }, p.name + (dup ? ` #${dup + 1}` : ""), badge),
       h("input", { type: "text", class: "pmodel", list: dlId, value: s.model, placeholder: "模型名", "aria-label": "模型",
-        oninput: (e) => { s.model = e.target.value; updateSynth(); validateForm(); }, onchange: () => updateSynth() }),
+        oninput: (e) => { s.model = e.target.value; s.auto = false; updateSynth(); validateForm(); }, onchange: () => updateSynth() }),
       h("input", { type: "text", class: "prole", value: s.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色",
         oninput: (e) => { s.role = e.target.value; } }),
       h("div", { class: "pactions" },
-        h("button", { class: "btn small", title: "再加一个席位", onclick: () => { seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p) }); renderParticipants(); } }, "＋"),
+        h("button", { class: "btn small", title: "再加一个席位", onclick: () => { seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p), auto: s.auto }); renderParticipants(); } }, "＋"),
         dup ? h("button", { class: "btn small", title: "移除这个席位", onclick: () => { seats.splice(idx, 1); renderParticipants(); } }, "－") : null)
     );
     list.append(row);
@@ -409,23 +411,23 @@ function validateForm() {
 function applyFreeLineup() {
   if (!seats) initSeats();
   seats.forEach((s) => (s.on = false));
-  const picks = ["gemini", "groq", "openrouter"].filter((id) => keyOk(byId(id)));
+  const picks = ["gemini", "groq", "openrouter", "pollinations"].filter((id) => byId(id) && keyOk(byId(id))).slice(0, 3);
+  if (!picks.length) {
+    toast("免费阵容需要至少一个免费 key（Gemini / Groq / OpenRouter / Pollinations），先去设置页配置");
+    renderParticipants(); return;
+  }
   picks.forEach((id) => {
     const s = seats.find((x) => x.provider === id);
     s.on = true;
-    if (id === "openrouter") s.model = byId(id).default_model;
+    if (s.auto !== false) s.model = byId(id).default_model;
   });
   if (picks.length < 2) {
-    // 免费 key 不够两家：用免 key 的 Pollinations 补足席位（换不同角色）
-    const roles = ["正方：支持派", "反方：质疑派", "风险派"];
-    let polls = seats.filter((x) => x.provider === "pollinations");
-    while (polls.length < 3 - picks.length) {
-      const i = seats.indexOf(polls[polls.length - 1]);
-      seats.splice(i + 1, 0, { provider: "pollinations", model: byId("pollinations").default_model, role: "", on: false });
-      polls = seats.filter((x) => x.provider === "pollinations");
-    }
-    polls.slice(0, 3 - picks.length).forEach((s, k) => { s.on = true; if (!s.role) s.role = roles[k]; });
-    toast(picks.length ? "免费 key 不足两家，已用 Pollinations 补足" : "尚未配置免费 key，已用免 key 的 Pollinations 组队");
+    // 只有一家免费 key：同一家再坐一席，换个角色，凑够两方
+    const first = seats.find((x) => x.provider === picks[0]);
+    first.role = first.role || "正方：支持派";
+    const i = seats.indexOf(first);
+    seats.splice(i + 1, 0, { provider: first.provider, model: first.model, role: "反方：质疑派", on: true, auto: first.auto });
+    toast(`只配置了 ${byId(picks[0]).name} 一家免费 key，已让它以正反两个角色参会`);
   }
   renderParticipants();
 }
@@ -679,7 +681,10 @@ function renderSettings() {
         h("div", { class: "row" }, h("div", { class: "grow" }, keyInput),
           h("button", { class: "btn small primary", onclick: async () => {
             const k = keyInput.value.trim(); if (!k) { toast("请先粘贴 key"); return; }
-            try { await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = ""; toast(`${p.name} key 已保存到本机 .env`); await loadProviders(); renderSettings(); }
+            try {
+              const r = await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = "";
+              toast(r.refresh_error ? `${p.name} key 已保存，但获取模型列表失败：${r.refresh_error}`
+                : `${p.name} key 已保存，获取到 ${r.models} 个模型，默认使用 ${r.default_model}`); await loadProviders(); renderSettings(); }
             catch (e) { toast(e.message); }
           } }, "保存"),
           p.key_configured ? h("button", { class: "btn small danger", onclick: async () => {
@@ -695,7 +700,7 @@ function renderSettings() {
 // 刷新模型列表后：还在用旧默认模型的席位跟着换成新的默认模型（主要是 OpenRouter 的 :free 模型）
 function seatsSyncDefaults() {
   if (!seats) return;
-  seats.forEach((s) => { const p = byId(s.provider); if (p && !s.on && p.models.length && !p.models.includes(s.model)) s.model = p.default_model; });
+  seats.forEach((s) => { const p = byId(s.provider); if (p && s.auto !== false) s.model = p.default_model; });
 }
 
 // ============================================================ 启动

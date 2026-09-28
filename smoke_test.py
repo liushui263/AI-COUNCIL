@@ -1,7 +1,8 @@
-"""链路冒烟测试：用免 key 的 Pollinations 真实调用一次（需要能访问外网）。
+"""链路冒烟测试：真实调用一次已配置 key 的 provider（需要能访问外网）。
 
-运行：python3 smoke_test.py            （Windows 上用 python smoke_test.py）
-可选：python3 smoke_test.py gemini     （测试某个已在 .env 配好 key 的 provider）
+运行：python3 smoke_test.py gemini            （Windows 上用 python）
+可选：python3 smoke_test.py groq 模型名        （指定模型）
+不带参数时用第一个已配置 key 的 provider。
 """
 import sys
 import time
@@ -10,7 +11,11 @@ from backend import providers
 
 
 def main() -> int:
-    pid = sys.argv[1] if len(sys.argv) > 1 else "pollinations"
+    configured = [p["id"] for p in providers.PROVIDERS if providers.key_configured(p["id"])]
+    pid = sys.argv[1] if len(sys.argv) > 1 else (configured[0] if configured else "")
+    if not pid:
+        print("还没有配置任何 key：先运行 app.py 在设置页填一个，或写进 .env")
+        return 1
     model = sys.argv[2] if len(sys.argv) > 2 else providers.default_model(pid)
     print(f"测试 {pid} / {model}：", flush=True)
     t = time.time()

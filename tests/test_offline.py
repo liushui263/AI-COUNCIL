@@ -295,6 +295,22 @@ class OfflineE2E(unittest.TestCase):
         self.assertNotIn(b"http://cdn", raw)
         self.assertNotIn(b"https://cdn", raw)
 
+    def test_13_default_model_follows_list(self):
+        pick = providers.pick_default
+        self.assertEqual(pick("gemini", ["gemini-2.5-flash", "gemini-3.8-flash", "gemini-3.8-flash-lite",
+                                         "gemini-3.8-flash-image", "text-embedding-004", "gemini-3.9-flash-preview"]),
+                         "gemini-3.8-flash")
+        self.assertEqual(pick("groq", ["whisper-large-v3", "meta-llama/llama-guard-4-12b", "qwen/qwen3-32b"]),
+                         "qwen/qwen3-32b")
+        self.assertIsNone(pick("openrouter", ["a/b"]))  # 没有免费模型时不替用户选付费的
+        # 保存 key 会自动刷新模型列表并返回新默认模型
+        st, r = self.jcall("PUT", "/api/providers/anthropic/key", {"key": KEY})
+        self.assertEqual(r["models"], 1)
+        self.assertEqual(r["default_model"], "claude-haiku-4-5")
+        st, r = self.jcall("PUT", "/api/providers/xai/key", {"key": "bad"})
+        self.assertIn("refresh_error", r)
+        store.set_key("XAI_API_KEY", None)
+
     def test_12_prompts(self):
         self.assertNotIn("背景信息", debate.blind_user("t", "  "))
         self.assertIn("中立客观的专家", debate.BLIND_SYSTEM.format(role=debate.DEFAULT_ROLE))

@@ -67,7 +67,14 @@ def put_key(h, body, pid):
     except ValueError as e:
         raise ApiError(400, str(e)) from None
     log.info("已保存 %s 的 key（%s）", pid, store.mask(key))
-    h.send_json({"ok": True, "key_configured": True})
+    # 保存后立刻刷新模型列表：既验证 key，也让默认模型跟上官方的最新模型
+    out = {"ok": True, "key_configured": True}
+    try:
+        entry = providers.refresh_models(pid)
+        out.update(models=len(entry["models"]), default_model=providers.default_model(pid))
+    except ProviderError as e:
+        out["refresh_error"] = e.msg
+    h.send_json(out)
 
 
 @route("DELETE", r"/api/providers/(?P<pid>[a-z0-9_-]+)/key")
