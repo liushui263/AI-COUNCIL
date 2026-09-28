@@ -1,6 +1,7 @@
 """HTTP 路由（基于 http.server）+ SSE + 静态前端（规格第 7 节）。"""
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -303,9 +304,23 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise ApiError(400, "请求体不是合法的 JSON") from None
 
+    def _client_ok(self) -> bool:
+        """只接受本机连接；WSL 下另外放行 Windows 主机转发过来的连接（见 Server.extra_clients）。"""
+        ip = self.client_address[0]
+        if ip.startswith("::ffff:"):
+            ip = ip[7:]
+        try:
+            if ipaddress.ip_address(ip).is_loopback:
+                return True
+        except ValueError:
+            return False
+        return ip in getattr(self.server, "extra_clients", ())
+
     def _dispatch(self, method: str):
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if not self._client_ok():
+                raise ApiError(403, "只允许本机访问")
             if not self._host_ok():
                 raise ApiError(403, "只允许通过 127.0.0.1 访问")
             if method != "GET" and not self._origin_ok():
@@ -383,5 +398,28 @@ def port_in_use(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def make_server(host: str = "127.0.0.1", port: int = 8000) -> Server:
-    return Server((host, port), Handler)
+def make_server(host: str = "127.0.0.1", port: int = 8000, extra_clients=()) -> Server:
+    srv = Server((host, port), Handler)
+    srv.extra_clients = frozenset(extra_clients)
+    return srv
+
+
+def is_wsl() -> bool:
+    try:
+        with open("/proc/version", encoding="utf-8") as f:
+            return "microsoft" in f.read().lower()
+    except OSError:
+        return False
+
+
+def wsl_windows_host_ip() -> str | None:
+    """WSL2（NAT 模式）里 Windows 主机的地址 = 默认网关，从 /proc/net/route 读取。"""
+    try:
+        with open("/proc/net/route", encoding="utf-8") as f:
+            for line in f.readlines()[1:]:
+                parts = line.split()
+                if len(parts) > 2 and parts[1] == "00000000":
+                    return socket.inet_ntoa(bytes.fromhex(parts[2])[::-1])
+    except (OSError, ValueError):
+        pass
+    return None
