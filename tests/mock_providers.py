@@ -4,6 +4,8 @@
   bad-model    → 400 模型不存在
   always-429   → 一直 429
   slow         → 每个 token 间隔 0.2s（用于测试取消）
+  always-503   → 一直 503 过载
+  fail-once*   → 同名模型第一次调用返回 503（带 Retry-After: 0），之后正常
 其余模型正常返回；system 里含“综合者”时返回带四个固定章节的综合报告。
 收到的请求都记录在 MockHandler.requests 里，便于断言（如盲写轮互不引用）。
 """
@@ -31,14 +33,18 @@ def _answer(system: str, user: str, model: str) -> str:
 class MockHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     requests: list = []
+    calls: dict = {}
+    spans: list = []  # (model, start, end)，用于检查同一 provider 是否串行
     lock = threading.Lock()
 
     def log_message(self, *a):
         pass
 
-    def _json(self, status, obj):
+    def _json(self, status, obj, headers=None):
         data = json.dumps(obj).encode()
         self.send_response(status)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -87,7 +93,11 @@ class MockHandler(BaseHTTPRequestHandler):
         if self._key() != VALID_KEY:
             return self._json(401, {"error": {"message": "invalid key"}})
         if self.path.startswith("/openai/"):
-            return self._openai(body)
+            t0 = time.time()
+            self._openai(body)
+            with self.lock:
+                MockHandler.spans.append((body.get("model"), t0, time.time()))
+            return
         if self.path.startswith("/gemini/"):
             return self._gemini(body)
         if self.path.startswith("/anthropic/"):
@@ -95,6 +105,14 @@ class MockHandler(BaseHTTPRequestHandler):
         self._json(404, {"error": "nope"})
 
     def _common(self, model):
+        with self.lock:
+            n = MockHandler.calls[model] = MockHandler.calls.get(model, 0) + 1
+        if model.startswith("fail-once") and n == 1:
+            self._json(503, {"error": {"message": "overloaded"}}, {"Retry-After": "0"})
+            return True
+        if model == "always-503":
+            self._json(503, {"error": {"message": "This model is currently experiencing high demand."}})
+            return True
         if model == "bad-model":
             self._json(400, {"error": {"message": f"model {model} does not exist"}})
             return True

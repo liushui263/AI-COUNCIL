@@ -45,6 +45,7 @@ class OfflineE2E(unittest.TestCase):
                 p.pop("fallback_chat_url", None)
                 p.pop("fallback_models_url", None)
 
+        providers.BACKOFF = (0.1, 0.1, 0.1)  # 测试里不真等
         cls.srv = server.make_server("127.0.0.1", 0)
         cls.base = f"http://127.0.0.1:{cls.srv.server_address[1]}"
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
@@ -246,11 +247,13 @@ class OfflineE2E(unittest.TestCase):
         self.assertEqual(d["status"], "cancelled")
 
     def test_07_rate_limit_retry_then_fail(self):
-        t = time.time()
         with self.assertRaises(providers.ProviderError) as cm:
             providers.chat("groq", "always-429", "s", "u", 200, 0.5, False)
-        self.assertGreaterEqual(time.time() - t, 4.5)  # 1s + 4s 退避
-        self.assertIn("已重试 2 次", cm.exception.msg)
+        self.assertIn("已重试 3 次", cm.exception.msg)
+        notes = []
+        r = providers.chat("groq", "fail-once-a", "s", "u", 200, 0.5, False, on_retry=notes.append)
+        self.assertIn("我的观点", r["text"])
+        self.assertIn("503", notes[0])
 
     def test_08_bad_key(self):
         store.set_key("DEEPSEEK_API_KEY", "wrong-key-XYZ")
@@ -310,6 +313,52 @@ class OfflineE2E(unittest.TestCase):
         st, r = self.jcall("PUT", "/api/providers/xai/key", {"key": "bad"})
         self.assertIn("refresh_error", r)
         store.set_key("XAI_API_KEY", None)
+
+    def test_14_same_provider_serial_and_synth_fallback(self):
+        mock_providers.MockHandler.spans.clear()
+        body = {"topic": "串行与综合兜底", "debate_rounds": 0,
+                "participants": [{"provider": "groq", "model": "slow"}, {"provider": "groq", "model": "slow"},
+                                 {"provider": "gemini", "model": "g-ok"}],
+                "synthesis": {"provider": "anthropic", "model": "always-503"}}
+        st, r = self.jcall("POST", "/api/debates", body)
+        evs = self.events(r["debate_id"])
+        spans = sorted(s for s in mock_providers.MockHandler.spans if s[0] == "slow")
+        self.assertEqual(len(spans), 3)  # 2 次发言 + 1 次兜底综合
+        self.assertLessEqual(spans[0][2], spans[1][1] + 0.05)  # 同一 provider 不重叠
+        d = store.load_debate(r["debate_id"])
+        self.assertEqual(d["status"], "done")
+        self.assertEqual(d["synthesis"]["by"], "groq/slow")
+        self.assertIn("always-503", d["synthesis"]["fallback_from"][0])
+        self.assertTrue(any(e == "synthesis_retry" and "改由" in x.get("note", "") for e, x in evs))
+
+    def test_15_resume_retry_failed_and_extend(self):
+        body = {"topic": "从历史继续", "debate_rounds": 1, "participants": [
+            {"provider": "groq", "model": "ok-1"}, {"provider": "gemini", "model": "bad-model"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        did = r["debate_id"]
+        self.events(did)
+        d = store.load_debate(did)
+        self.assertEqual([m["status"] for m in d["rounds"][0]["messages"]], ["ok", "failed"])
+        # 把失败的一方换成能用的模型（模拟用户换模型或过一阵额度恢复），然后重试失败的发言并追加 1 轮
+        for rnd in d["rounds"]:
+            rnd["messages"][1]["model"] = "g-fixed"
+        d["config"]["participants"][1]["model"] = "g-fixed"
+        store.save_debate(d)
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"retry_failed": True, "extra_rounds": 1})
+        self.assertEqual(st, 202, r)
+        evs = self.events(did)
+        self.assertEqual(evs[-1], ("debate_done", {"status": "done"}))
+        d = store.load_debate(did)
+        self.assertEqual(len(d["rounds"]), 3)
+        self.assertEqual(d["config"]["debate_rounds"], 2)
+        self.assertTrue(all(m["status"] == "ok" for rnd in d["rounds"] for m in rnd["messages"]))
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"extra_rounds": 99})
+        self.assertEqual(st, 409)
+
+    def test_16_quote_trim(self):
+        u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])
+        self.assertLess(len(u), 3400)
+        self.assertIn("后文略", u)
 
     def test_12_prompts(self):
         self.assertNotIn("背景信息", debate.blind_user("t", "  "))

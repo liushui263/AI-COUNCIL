@@ -497,8 +497,24 @@ function startLive(id) {
     live.debate = d;
     $("#live-topic").textContent = d.topic;
     $("#live-status").textContent = STATUS_TEXT[d.status] || d.status;
+    prefillLive(d);
     connectEvents(id);
   }).catch((e) => toast(e.message));
+}
+// 从历史重新开启时，先把已有的轮次和报告画出来，之后的事件在此基础上更新
+function prefillLive(d) {
+  (d.rounds || []).forEach((rnd) => {
+    ensureRound(rnd.index, rnd.index === 0 ? (d.config.blind_round ? "第 0 轮：盲写" : "第 0 轮：公开首轮") : `第 ${rnd.index} 轮：交叉辩论`);
+    rnd.messages.forEach((m) => {
+      const c = live.cards.get(cardKey(rnd.index, m.participant)); if (!c) return;
+      if (m.status === "ok") { c.text = m.text; c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(m.text); c.usage.textContent = renderUsage(m.usage); setCardStatus(c, "ok"); }
+      else if (m.status === "failed") { setCardStatus(c, "failed"); c.body.innerHTML = ""; c.body.append(h("div", { class: "err" }, m.error || "失败")); }
+    });
+  });
+  const syn = d.synthesis;
+  if (syn && syn.status === "ok") {
+    const s = ensureSynth(syn.by); s.body.classList.remove("plain"); s.body.classList.add("md"); s.body.innerHTML = md(syn.text); s.dot.className = "dot ok"; s.st.textContent = "已完成（旧）";
+  }
 }
 function ensureRound(r, title) {
   if (live.rounds.has(r)) return live.rounds.get(r);
@@ -579,15 +595,10 @@ $("#btn-cancel").onclick = async () => {
 $("#btn-live-synth").onclick = () => live && runSynthesis(live.id);
 
 async function runSynthesis(id) {
-  try {
-    await api("POST", `/api/debates/${id}/synthesize`);
-    // 复用进行中视图观看综合过程
-    if (!live || live.id !== id || !live.debate) { startLive(id); return; }
-    live.done = false; live.synth = null; $("#live-synth").innerHTML = "";
-    $("#btn-live-synth").style.display = "none";
-    showView("live");
-    connectEvents(id);
-  } catch (e) { toast(e.message); }
+  try { await api("POST", `/api/debates/${id}/synthesize`); startLive(id); } catch (e) { toast(e.message); }
+}
+async function resumeDebate(id, body) {
+  try { await api("POST", `/api/debates/${id}/resume`, body); startLive(id); } catch (e) { toast(e.message); }
 }
 
 // ============================================================ 历史
@@ -616,11 +627,17 @@ async function openDetail(id) {
   $("#hist-list-wrap").style.display = "none";
   const box = $("#hist-detail"); box.innerHTML = ""; box.style.display = "block";
   const cfg = d.config, u = d.usage || {};
+  const hasFailed = (d.rounds || []).some((r) => r.messages.some((m) => m.status !== "ok"));
+  const extraSel = h("select", { style: "width:auto", "aria-label": "追加轮数", title: "再追加几轮交叉辩论（会先重试失败的发言），完成后重新综合" },
+    [1, 2, 3].map((n) => h("option", { value: n }, `再辩 ${n} 轮`)));
   const actions = h("div", { class: "row" },
     h("button", { class: "btn", onclick: loadHistory }, "← 返回列表"),
     d.active ? h("button", { class: "btn primary", onclick: () => startLive(id) }, "观看进行中") : null,
     h("a", { class: "btn", href: `/api/debates/${id}/export.md`, download: "", style: "text-decoration:none" }, "导出 .md"),
     !d.active ? h("button", { class: "btn", onclick: () => runSynthesis(id) }, d.synthesis && d.synthesis.status === "ok" ? "重新综合" : "生成综合报告") : null,
+    !d.active && hasFailed ? h("button", { class: "btn primary", onclick: () => resumeDebate(id, { retry_failed: true }) }, "重试失败的发言") : null,
+    !d.active ? h("span", { class: "row", style: "gap:6px" }, extraSel,
+      h("button", { class: "btn", onclick: () => resumeDebate(id, { retry_failed: hasFailed, extra_rounds: +extraSel.value }) }, "继续辩论")) : null,
     !d.active ? h("button", { class: "btn danger", onclick: async () => {
       if (!confirm("确定删除这场辩论的存档吗？此操作不可恢复。")) return;
       try { await api("DELETE", `/api/debates/${id}`); toast("已删除"); loadHistory(); } catch (e) { toast(e.message); }

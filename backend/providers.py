@@ -25,17 +25,21 @@ from . import store
 log = logging.getLogger("ai-council.providers")
 
 CONNECT_TIMEOUT = 10
+BACKOFF = (2, 8, 20)  # 429/5xx 没有等待提示时的退避秒数；长度即最多重试次数
+MAX_WAIT = 65         # 单次最多等多久；超过（如每日额度用完）就不等了
 READ_TIMEOUT = 120
 APP_NAME = "AI Council"
 APP_URL = "http://127.0.0.1:8000"
 
 
 class ProviderError(Exception):
-    def __init__(self, msg: str, retryable: bool = False, status: int | None = None):
+    def __init__(self, msg: str, retryable: bool = False, status: int | None = None,
+                 retry_after: float | None = None):
         super().__init__(msg)
         self.msg = msg
         self.retryable = retryable
         self.status = status
+        self.retry_after = retry_after  # 服务端建议的等待秒数（Retry-After 头或错误文本里的提示）
 
     def __str__(self) -> str:
         return self.msg
@@ -272,6 +276,30 @@ def _error_message(status: int, body: bytes) -> str:
     return msg or raw[:300] or f"HTTP {status}"
 
 
+def _retry_after(headers, text: str) -> float | None:
+    """服务端建议的等待时间：Retry-After 头，或错误文本里的 “try again in 32.4s” / “retryDelay: 30s”。"""
+    try:
+        v = headers.get("Retry-After") if headers else None
+        if v:
+            return float(v)
+    except (TypeError, ValueError):
+        pass
+    text = text or ""
+    m = re.search(r"(?:try again|retry) in\s+((?:[\d.]+\s*(?:ms|h|m|s|min|seconds?)\s*)+)", text, re.I) \
+        or re.search(r"retryDelay[\"':\s]+([\d.]+s)", text)
+    if not m:
+        return None
+    total = 0.0
+    for num, unit in re.findall(r"([\d.]+)\s*(ms|h|min|m|s|seconds?)", m.group(1).rstrip(".")):
+        try:
+            n = float(num.rstrip("."))
+        except ValueError:
+            continue
+        unit = unit.lower()
+        total += n / 1000 if unit == "ms" else n * 3600 if unit == "h" else n * 60 if unit in ("m", "min") else n
+    return total or None
+
+
 def _classify_http_error(status: int, body: bytes, key: str) -> ProviderError:
     detail = _scrub(_error_message(status, body), key)
     if status == 429:
@@ -302,7 +330,9 @@ def _open(url: str, headers: dict, body: dict | None, key: str, method: str | No
             err_body = e.read()
         except Exception:  # noqa: BLE001
             err_body = b""
-        raise _classify_http_error(e.code, err_body, key) from None
+        err = _classify_http_error(e.code, err_body, key)
+        err.retry_after = _retry_after(e.headers, err.msg)
+        raise err from None
     except urllib.error.URLError as e:
         reason = getattr(e, "reason", e)
         raise ProviderError(f"网络错误：{_scrub(str(reason), key)}", retryable=True) from None
@@ -585,17 +615,26 @@ def chat(provider_id: str, model: str, system: str, user: str,
     model = (model or "").strip() or default_model(provider_id)
     fn = _CHAT_BY_KIND[p["kind"]]
 
-    rate_retries, net_retries = 0, 0
+    # TODO(规格待确认)：规格写 429 退避 1s、4s 最多 2 次。免费档实测经常要等 30s 左右（Groq 按分钟算 token），
+    # 所以改为：优先按服务端提示的时间等；没提示就 2s、8s、20s；503 过载同样处理。单次最多等 MAX_WAIT 秒。
+    busy_retries, net_retries = 0, 0
     while True:
         try:
             return fn(p, model, system, user, int(max_tokens), float(temperature), stream, on_token, key)
         except ProviderError as e:
-            if e.status == 429 and rate_retries < 2:
-                wait = (1, 4)[rate_retries]
-                rate_retries += 1
-                log.info("%s/%s 429 限流，%ss 后第 %s 次重试", provider_id, model, wait, rate_retries)
+            busy = e.status == 429 or (e.status is not None and e.status >= 500)
+            if busy and busy_retries < len(BACKOFF):
+                wait = e.retry_after if e.retry_after is not None else BACKOFF[busy_retries]
+                if wait > MAX_WAIT:
+                    # 例如每日额度用完，要等几小时：不空等，直接失败
+                    e.msg = f"{e.msg}（需要等待约 {int(wait)} 秒，超过上限，放弃重试）"
+                    raise
+                wait = max(wait, 0.5)
+                busy_retries += 1
+                what = "限流" if e.status == 429 else "服务繁忙"
+                log.info("%s/%s %s %s，%.0fs 后第 %s 次重试", provider_id, model, e.status, what, wait, busy_retries)
                 if on_retry:
-                    on_retry(f"429 限流，{wait}s 后重试（第 {rate_retries} 次）")
+                    on_retry(f"{e.status} {what}，{wait:.0f} 秒后重试（第 {busy_retries} 次）")
                 time.sleep(wait)
                 continue
             if e.status is None and e.retryable and net_retries < 1:
@@ -605,8 +644,8 @@ def chat(provider_id: str, model: str, system: str, user: str,
                     on_retry("网络错误或超时，重试 1 次")
                 time.sleep(1)
                 continue
-            if e.status == 429:
-                e.msg = f"{e.msg}（已重试 {rate_retries} 次）"
+            if busy:
+                e.msg = f"{e.msg}（已重试 {busy_retries} 次）"
             raise
 
 

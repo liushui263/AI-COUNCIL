@@ -17,6 +17,8 @@ log = logging.getLogger("ai-council.debate")
 
 MIN_PARTICIPANTS, MAX_PARTICIPANTS = 2, 8
 MAX_DEBATE_ROUNDS = 5
+MAX_TOTAL_ROUNDS = 15   # 从历史继续辩论时，交叉辩论累计上限
+QUOTE_LIMIT = 3000      # 交叉轮引用他人发言时每段最多字符数，控制 token（免费档常按分钟限 token）
 DEFAULT_ROLE = "中立客观的专家"
 TERMINAL_EVENTS = ("debate_done", "debate_cancelled")
 
@@ -64,7 +66,10 @@ def cross_user(topic: str, others: list) -> str:
     parts = [f"主题：{topic}", "", "以下是其他 AI 在上一轮的观点：", ""]
     if others:
         for m in others:
-            parts += ["", f"【{_speaker_label(m)}】", m["text"], ""]
+            text = m["text"]
+            if len(text) > QUOTE_LIMIT:
+                text = text[:QUOTE_LIMIT] + "……（篇幅所限，后文略）"
+            parts += ["", f"【{_speaker_label(m)}】", text, ""]
     else:
         parts += ["（其他参会者上一轮均未能发言）", ""]
     parts += [
@@ -282,6 +287,34 @@ class DebateManager:
         run.thread = threading.Thread(target=self._run_synthesis_only, args=(run,), daemon=True)
         run.thread.start()
 
+    def resume(self, debate_id: str, body: dict) -> None:
+        """从历史里重新开启一场辩论：重试失败的发言，和/或再追加几轮交叉辩论，然后重新综合。"""
+        if self.is_active(debate_id):
+            raise ValidationError("辩论仍在进行中，请等待结束或先取消")
+        debate = store.load_debate(debate_id)
+        if not debate:
+            raise KeyError(debate_id)
+        body = body or {}
+        retry = bool(body.get("retry_failed"))
+        extra = _num(body.get("extra_rounds"), int, "追加轮数", 0, MAX_DEBATE_ROUNDS, 0)
+        cfg = debate["config"]
+        if cfg["debate_rounds"] + extra > MAX_TOTAL_ROUNDS:
+            raise ValidationError(f"交叉辩论总轮数最多 {MAX_TOTAL_ROUNDS} 轮")
+        missing = sorted({providers.get_provider(p["provider"])["name"] for p in cfg["participants"]
+                          if not providers.key_ok(p["provider"])})
+        if missing:
+            raise ValidationError(f"以下 provider 的 key 尚未配置：{'、'.join(missing)}。请先到设置页配置")
+        cfg["debate_rounds"] += extra
+        debate["status"] = "running"
+        debate.pop("error", None)
+        self._save(debate)
+        run = Run(debate)
+        with self._lock:
+            self._runs[debate_id] = run
+        run.thread = threading.Thread(target=self._run_debate, args=(run, retry), daemon=True,
+                                      name=f"debate-{debate_id[:8]}")
+        run.thread.start()
+
     def delete(self, debate_id: str) -> bool:
         if self.is_active(debate_id):
             raise ValidationError("辩论仍在进行中，请先取消")
@@ -335,42 +368,63 @@ class DebateManager:
         run.emit("round_started", {"round": idx, "title": round_title(idx, run.debate["config"]["blind_round"])})
         return rnd
 
-    def _run_round(self, run: Run, rnd: dict, prev: dict | None) -> None:
+    def _prompt(self, d: dict, m: dict, idx: int, prev: dict | None) -> tuple:
+        system = BLIND_SYSTEM.format(role=m["role"] or DEFAULT_ROLE)
+        if idx == 0:
+            return system, blind_user(d["topic"], d["background"])
+        # 上下文裁剪：只带“其他人上一轮”的发言
+        others = [x for x in prev["messages"] if x["status"] == "ok" and x["participant"] != m["participant"]]
+        return system, cross_user(d["topic"], others)
+
+    def _run_round(self, run: Run, rnd: dict, prev: dict | None, only: set | None = None) -> None:
+        """跑一轮；only 给定时只（重新）调用这些参会者。"""
         d = run.debate
         cfg = d["config"]
         idx = rnd["index"]
-        msgs = rnd["messages"]
+        msgs = [m for m in rnd["messages"] if only is None or m["participant"] in only]
 
         if idx == 0 and not cfg["blind_round"]:
-            # 公开首轮：依次发言，后者看得到前者
+            # 公开首轮：依次发言，后者看得到前者（重试时也能看到排在前面的成功发言）
             for m in msgs:
-                earlier = [x for x in msgs if x["status"] == "ok"]
+                pos = rnd["messages"].index(m)
+                earlier = [x for x in rnd["messages"][:pos] if x["status"] == "ok"]
                 system = OPEN_SYSTEM.format(role=m["role"] or DEFAULT_ROLE)
                 self._call(run, idx, m, system, open_user(d["topic"], d["background"], earlier))
                 self._save(d)
             return
 
-        jobs = []
+        # 同一个 provider 的参会者共用一份免费额度（按分钟算请求数/token），并发只会一起撞限流：
+        # 不同 provider 之间并行，同一 provider 内依次调用
+        groups: dict = {}
         for m in msgs:
-            system = BLIND_SYSTEM.format(role=m["role"] or DEFAULT_ROLE)
-            if idx == 0:
-                user = blind_user(d["topic"], d["background"])
-            else:
-                # 上下文裁剪：只带“其他人上一轮”的发言
-                others = [x for x in prev["messages"] if x["status"] == "ok" and x["participant"] != m["participant"]]
-                user = cross_user(d["topic"], others)
-            jobs.append((m, system, user))
+            groups.setdefault(m["provider"], []).append(m)
 
-        with ThreadPoolExecutor(max_workers=min(8, len(jobs)), thread_name_prefix=f"r{idx}") as pool:
-            futures = [pool.submit(self._call, run, idx, m, s, u) for m, s, u in jobs]
-            for f in futures:
-                f.result()
+        def run_group(group):
+            for m in group:
+                system, user = self._prompt(d, m, idx, prev)
+                self._call(run, idx, m, system, user)
                 self._save(d)
+
+        if not groups:
+            return
+        with ThreadPoolExecutor(max_workers=min(8, len(groups)), thread_name_prefix=f"r{idx}") as pool:
+            for f in [pool.submit(run_group, g) for g in groups.values()]:
+                f.result()
+
+    def _synth_candidates(self, d: dict) -> list:
+        """综合者候选：先用指定的综合者，失败再依次换参会者里其他（能用的）模型。"""
+        syn = d["config"]["synthesis"]
+        out = [(syn["provider"], syn["model"])]
+        for p in d["config"]["participants"]:
+            c = (p["provider"], p["model"])
+            if c not in out and providers.key_ok(p["provider"]):
+                out.append(c)
+        return out
 
     def _synthesize(self, run: Run) -> bool:
         d = run.debate
-        syn = d["config"]["synthesis"]
-        by = f"{syn['provider']}/{syn['model']}"
+        cands = self._synth_candidates(d)
+        by = f"{cands[0][0]}/{cands[0][1]}"
         d["synthesis"] = {"text": "", "by": by, "status": "running"}
         run.emit("synthesis_started", {"by": by})
 
@@ -383,43 +437,67 @@ class DebateManager:
         # TODO(规格待确认)：综合报告较长，max_tokens 至少给 2000，避免四个章节被截断；温度不高于 0.7 以求忠实
         max_tokens = max(d["config"]["max_tokens"], 2000)
         temperature = min(d["config"]["temperature"], 0.7)
-        try:
-            res = providers.chat(syn["provider"], syn["model"], SYNTH_SYSTEM, synth_user(build_transcript(d)),
-                                 max_tokens, temperature, True, on_token, on_retry)
-            text = (res.get("text") or "").strip()
-            if not text:
-                raise ProviderError("综合者返回了空内容")
-            d["synthesis"] = {"text": text, "by": by, "status": "ok", "usage": res.get("usage")}
-            run.emit("synthesis_done", {"text": text, "by": by, "usage": res.get("usage")})
-            return True
-        except Exception as e:  # noqa: BLE001
-            err = e.msg if isinstance(e, ProviderError) else f"内部错误：{type(e).__name__}: {e}"
-            if not isinstance(e, ProviderError):
-                log.exception("综合失败")
-            d["synthesis"] = {"text": "", "by": by, "status": "failed", "error": err}
-            run.emit("synthesis_failed", {"error": err, "by": by})
-            return False
+        user = synth_user(build_transcript(d))
+        errors = []
+        for i, (pid, model) in enumerate(cands):
+            by = f"{pid}/{model}"
+            if i:
+                # TODO(规格待确认)：规格只说用指定综合者；免费档常 503/429，这里自动换参会者里的其他模型
+                run.emit("synthesis_retry", {"note": f"{errors[-1]}；改由 {by} 综合", "by": by})
+            try:
+                res = providers.chat(pid, model, SYNTH_SYSTEM, user, max_tokens, temperature, True, on_token, on_retry)
+                text = (res.get("text") or "").strip()
+                if not text:
+                    raise ProviderError("综合者返回了空内容")
+                d["synthesis"] = {"text": text, "by": by, "status": "ok", "usage": res.get("usage")}
+                if errors:
+                    d["synthesis"]["fallback_from"] = errors
+                run.emit("synthesis_done", {"text": text, "by": by, "usage": res.get("usage")})
+                return True
+            except Exception as e:  # noqa: BLE001
+                err = e.msg if isinstance(e, ProviderError) else f"内部错误：{type(e).__name__}: {e}"
+                if not isinstance(e, ProviderError):
+                    log.exception("综合失败")
+                errors.append(f"{by} 失败：{err}")
+        err = "；".join(errors)
+        d["synthesis"] = {"text": "", "by": f"{cands[0][0]}/{cands[0][1]}", "status": "failed", "error": err}
+        run.emit("synthesis_failed", {"error": err, "by": d["synthesis"]["by"]})
+        return False
 
-    def _run_debate(self, run: Run) -> None:
+    def _run_debate(self, run: Run, retry_failed: bool = False) -> None:
+        """跑完（或接着跑完）一场辩论：可选先重试失败的发言，再补齐计划中的轮次，最后综合。"""
         d = run.debate
         cfg = d["config"]
         run.emit("debate_started", {"debate_id": d["id"]})
         status = "done"
         try:
-            prev = None
-            planned = [0] + list(range(1, cfg["debate_rounds"] + 1))
-            for idx in planned:
-                if run.cancel_flag.is_set():
-                    break
-                rnd = self._new_round(run, idx)
-                self._run_round(run, rnd, prev)
-                self._save(d)
-                run.emit("round_done", {"round": idx})
-                if not any(m["status"] == "ok" for m in rnd["messages"]):
-                    # 本轮全部失败 → partial，中断后续轮次
+            if retry_failed:
+                for i, rnd in enumerate(d["rounds"]):
+                    if run.cancel_flag.is_set():
+                        break
+                    failed = {m["participant"] for m in rnd["messages"] if m["status"] != "ok"}
+                    if not failed:
+                        continue
+                    run.emit("round_started", {"round": rnd["index"], "title": round_title(rnd["index"], cfg["blind_round"]),
+                                               "retry": True})
+                    self._run_round(run, rnd, d["rounds"][i - 1] if i else None, only=failed)
+                    self._save(d)
+                    run.emit("round_done", {"round": rnd["index"]})
+
+            planned = 1 + cfg["debate_rounds"]
+            while len(d["rounds"]) < planned and not run.cancel_flag.is_set():
+                prev = d["rounds"][-1] if d["rounds"] else None
+                if prev is not None and not any(m["status"] == "ok" for m in prev["messages"]):
+                    # 上一轮全部失败 → partial，中断后续轮次
                     status = "partial"
                     break
-                prev = rnd
+                rnd = self._new_round(run, len(d["rounds"]))
+                self._run_round(run, rnd, prev)
+                self._save(d)
+                run.emit("round_done", {"round": rnd["index"]})
+                if not any(m["status"] == "ok" for m in rnd["messages"]):
+                    status = "partial"
+                    break
 
             if run.cancel_flag.is_set():
                 d["status"] = "cancelled"

@@ -162,6 +162,19 @@ def synthesize(h, body, did):
     h.send_json({"ok": True}, status=202)
 
 
+@route("POST", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/resume")
+def resume_debate(h, body, did):
+    """从历史重新开启：body {"retry_failed": bool, "extra_rounds": int}"""
+    _load_or_404(did)
+    try:
+        manager.resume(did, body or {})
+    except debate_mod.ValidationError as e:
+        raise ApiError(409, str(e)) from None
+    except KeyError:
+        raise ApiError(404, "找不到这场辩论") from None
+    h.send_json({"ok": True}, status=202)
+
+
 @route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/events")
 def debate_events(h, body, did):
     run = manager.get_run(did)
