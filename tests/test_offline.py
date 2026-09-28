@@ -478,6 +478,47 @@ class OfflineE2E(unittest.TestCase):
         self.assertIn("另存为 PDF", raw.decode())
         self.assert_no_key_leak(raw)
 
+    def test_21_truncation_and_reasoning(self):
+        mock_providers.MockHandler.requests.clear()
+        notes = []
+        r = providers.chat("groq", "trunc-a", "s", "u", 1500, 0.5, True, on_retry=lambda n, w: notes.append(n))
+        self.assertNotIn("截断", r["text"])  # 加大上限后完整输出
+        self.assertIn("加大到 4096", notes[0])
+        bodies = [rq["body"] for rq in mock_providers.MockHandler.requests if rq["body"].get("model") == "trunc-a"]
+        self.assertEqual([b["max_tokens"] for b in bodies], [1500, 4096])
+        with self.assertRaises(providers.ProviderError) as cm:
+            providers.chat("groq", "think-only", "s", "u", 1500, 0.5, False)
+        self.assertIn("思考过程", cm.exception.msg)
+        # gpt-oss 设低思考强度；不认识该参数的模型自动去掉重试
+        providers.chat("groq", "openai/gpt-oss-120b", "s", "u", 100, 0.5, False)
+        b = [rq["body"] for rq in mock_providers.MockHandler.requests if rq["body"].get("model") == "openai/gpt-oss-120b"][-1]
+        self.assertEqual(b["reasoning_effort"], "low")
+        r = providers.chat("openrouter", "reject-reasoning-x", "s", "u", 100, 0.5, False) if providers.key_ok("openrouter") else None
+        self.assertEqual(providers._reasoning_params("openrouter", "x"), {"reasoning": {"effort": "low"}})
+        r = providers.chat("groq", "gpt-oss-reject-reasoning", "s", "u", 100, 0.5, False)
+        self.assertTrue(r["text"])
+        # 新辩论默认 4096
+        self.assertEqual(debate.validate({"topic": "t", "participants": [{"provider": "groq"}, {"provider": "gemini"}]})
+                         ["config"]["max_tokens"], 4096)
+
+    def test_22_add_participant_on_resume(self):
+        body = {"topic": "中途加人", "debate_rounds": 0, "participants": [
+            {"provider": "groq", "model": "a"}, {"provider": "gemini", "model": "b"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        did = r["debate_id"]
+        self.events(did)
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"add_participants": [{"provider": "groq", "model": "c"}]})
+        self.assertEqual(st, 409)  # 加人必须再辩至少 1 轮
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {
+            "extra_rounds": 1, "add_participants": [{"provider": "groq", "model": "c", "role": "财务"}]})
+        self.assertEqual(st, 202, r)
+        self.events(did)
+        d = store.load_debate(did)
+        self.assertEqual([p["id"] for p in d["config"]["participants"]], ["groq", "gemini", "groq#2"])
+        self.assertEqual(len(d["rounds"][0]["messages"]), 2)
+        new = d["rounds"][1]["messages"][2]
+        self.assertEqual((new["participant"], new["model"], new["status"]), ("groq#2", "c", "ok"))
+
     def test_16_quote_trim(self):
         u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])
         self.assertLess(len(u), 3400)

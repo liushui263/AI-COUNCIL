@@ -113,7 +113,8 @@ a { color: var(--accent); }
 .seats { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .seat { display: grid; grid-template-columns: 20px 92px minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 6px; align-items: center;
   padding: 5px 8px; border-top: 1px solid var(--border); background: var(--panel); }
-.seat.people { grid-template-columns: 22px 88px minmax(0, 1.5fr) minmax(0, 1fr); }
+.seat.people { grid-template-columns: 22px 88px minmax(0, 1.5fr) minmax(0, 1fr) 26px; }
+.seat.added { background: var(--accent-soft); }
 .seat:first-child { border-top: 0; }
 .seat.off .sel { opacity: .5; }
 .seat .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -371,7 +372,7 @@ const S = {
   mode: "new",      // new | debate | settings
   tab: "people",    // 右栏：people | report
   cur: null,        // 当前打开的辩论
-  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7, retries: 2, atts: [] },
+  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 4096, temperature: 0.7, retries: 2, atts: [] },
 };
 const app = $("#app");
 
@@ -576,8 +577,8 @@ function renderSetupPanel() {
     h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
     h("details", { class: "sec" }, h("summary", {}, "高级参数"),
       h("div", { class: "row", style: "margin-top:8px" },
-        h("div", { class: "grow" }, h("label", { class: "lbl" }, "max_tokens（200~8000）"),
-          h("input", { type: "number", min: 200, max: 8000, step: 100, value: st.maxTokens, oninput: (e) => { st.maxTokens = +e.target.value; validateSetup(); } })),
+        h("div", { class: "grow" }, h("label", { class: "lbl" }, "最大输出长度（200~16384 tokens）"),
+          h("input", { type: "number", min: 200, max: 16384, step: 256, value: st.maxTokens, oninput: (e) => { st.maxTokens = +e.target.value; validateSetup(); } })),
         h("div", { class: "grow" }, h("label", { class: "lbl" }, "temperature（0~2）"),
           h("input", { type: "number", min: 0, max: 2, step: 0.1, value: st.temperature, oninput: (e) => { st.temperature = +e.target.value; validateSetup(); } })),
         h("div", { class: "grow" }, h("label", { class: "lbl" }, "失败重试次数（0~5）"),
@@ -593,7 +594,7 @@ function validateSetup() {
   else if (c.length < 2) reason = "在右侧至少勾选 2 位参会者";
   else if (c.length > 8) reason = "最多 8 位参会者";
   else if (c.some((s) => !keyOk(byId(s.provider)))) reason = "有参会者的 key 未配置";
-  else if (!(st.maxTokens >= 200 && st.maxTokens <= 8000)) reason = "max_tokens 需在 200~8000";
+  else if (!(st.maxTokens >= 200 && st.maxTokens <= 16384)) reason = "最大输出长度需在 200~16384";
   else if (!(st.temperature >= 0 && st.temperature <= 2)) reason = "temperature 需在 0~2";
   const btn = $("#btn-start"); if (btn) btn.disabled = !!reason;
   const r = $("#start-reason"); if (r) r.textContent = reason;
@@ -645,7 +646,7 @@ async function openDebate(id) {
   if (!PROVIDERS.length) await loadProviders();
   const keepTab = S.cur && S.cur.id === id ? S.tab : null;
   S.mode = "debate";
-  S.cur = { id, d, es: null, synthLive: null, reportIdx: null, edits: {}, synthEdit: null, followup: "", atts: [], extra: 1 };
+  S.cur = { id, d, es: null, synthLive: null, reportIdx: null, edits: {}, synthEdit: null, followup: "", atts: [], adds: [], extra: 1 };
   S.tab = keepTab || (reportsOf(d).length || d.active ? "report" : "people");
   setRightVisible(true);
   $("#btn-show-right").textContent = "📄 报告";
@@ -729,7 +730,7 @@ function renderComposer() {
   const ta = h("textarea", { rows: 2, placeholder: "补充新的内容或问题（可选），然后让它们接着辩…", value: cur.followup,
     oninput: (e) => { cur.followup = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) continueDebate(); } });
-  const edits = Object.keys(cur.edits).length + (cur.synthEdit ? 1 : 0) + (cur.retriesEdit != null ? 1 : 0);
+  const edits = Object.keys(cur.edits).length + cur.adds.length + (cur.synthEdit ? 1 : 0) + (cur.retriesEdit != null ? 1 : 0);
   const chips = h("div");
   const redraw = () => chips.replaceChildren(attachChips(cur.atts, redraw));
   redraw();
@@ -751,6 +752,7 @@ function editsPayload() {
   const cur = S.cur, body = {};
   const ps = Object.entries(cur.edits).map(([id, e]) => ({ id, ...e }));
   if (ps.length) body.participants = ps;
+  if (cur.adds.length) body.add_participants = cur.adds.map((a) => ({ ...a }));
   if (cur.synthEdit) { const [provider, model] = cur.synthEdit.split("|"); body.synthesis = { provider, model }; }
   if (cur.retriesEdit != null) body.max_retries = cur.retriesEdit;
   return body;
@@ -764,7 +766,7 @@ async function resume(extraBody) {
   const cur = S.cur;
   try {
     await api("POST", `/api/debates/${cur.id}/resume`, { ...editsPayload(), ...extraBody });
-    cur.followup = ""; cur.atts = []; cur.edits = {}; cur.synthEdit = null; cur.retriesEdit = null; cur.reportIdx = null; S.tab = "report";
+    cur.followup = ""; cur.atts = []; cur.adds = []; cur.edits = {}; cur.synthEdit = null; cur.retriesEdit = null; cur.reportIdx = null; S.tab = "report";
     await refreshCurrent(true);
     loadHistory();
   } catch (e) { toast(e.message); }
@@ -845,8 +847,26 @@ function renderPeopleTab(body) {
       h("span", { class: "avatar", style: `background:${colorOf(p.id)};width:20px;height:20px;font-size:11px;border-radius:6px` }, providerName(p.provider).slice(0, 1)),
       h("span", { class: "name", title: keyOk(byId(p.provider)) ? "" : "key 未配置" }, seatLabel(p) + (keyOk(byId(p.provider)) ? "" : " ⚠")),
       modelSelect(p.provider, e.model ?? p.model, (v) => set("model", v), d.active),
-      roleSelect(e.role ?? p.role, (v) => set("role", v), d.active)));
+      roleSelect(e.role ?? p.role, (v) => set("role", v), d.active),
+      h("span", { class: "acts" }, !d.active && keyOk(byId(p.provider))
+        ? h("button", { title: "再加一位参会者（同一家，可换模型或角色），从下一轮开始发言",
+            onclick: () => addSeat(p.provider, e.model ?? p.model) }, "＋") : null)));
   });
+  // 待加入的参会者：续辩时从下一轮开始发言
+  cur.adds.forEach((a, i) => {
+    const redraw = () => { renderComposer(); renderRight(); };
+    list.append(h("div", { class: "seat people added" },
+      h("span", { class: "avatar", style: "background:var(--muted);width:20px;height:20px;font-size:11px;border-radius:6px" }, providerName(a.provider).slice(0, 1)),
+      h("span", { class: "name", title: "新加入，从下一轮开始发言" }, `${providerName(a.provider)}（新）`),
+      modelSelect(a.provider, a.model, (v) => { a.model = v; redraw(); }, false),
+      roleSelect(a.role, (v) => { a.role = v; redraw(); }, false),
+      h("span", { class: "acts" }, h("button", { title: "不加了", onclick: () => { cur.adds.splice(i, 1); redraw(); } }, "✕"))));
+  });
+  const total = cfg.participants.length + cur.adds.length;
+  const others = PROVIDERS.filter((x) => keyOk(x));
+  const addSel = !d.active && total < 8 && others.length ? h("select", { class: "sel", style: "margin-top:6px",
+    onchange: (ev) => { if (ev.target.value) addSeat(ev.target.value, ""); } },
+    h("option", { value: "" }, "＋ 添加参会者…"), others.map((x) => h("option", { value: x.id }, x.name))) : null;
   const synthSel = h("select", { disabled: d.active, onchange: (ev) => {
     const orig = `${cfg.synthesis.provider}|${cfg.synthesis.model}`;
     cur.synthEdit = ev.target.value === orig ? null : ev.target.value; renderComposer(); } });
@@ -855,8 +875,8 @@ function renderPeopleTab(body) {
   opts.forEach((v) => synthSel.append(h("option", { value: v }, `${providerName(v.split("|")[0])} / ${v.split("|")[1]}`)));
   synthSel.value = cur.synthEdit || opts[0];
   body.append(
-    h("div", { class: "sec" }, h("h3", {}, "参会者"), list,
-      h("div", { class: "hint" }, d.active ? "辩论进行中，结束后可以改模型和角色。" : "改动在下次“继续辩论”、“重试失败的发言”或“重新综合”时生效。")),
+    h("div", { class: "sec" }, h("h3", {}, "参会者"), list, addSel,
+      h("div", { class: "hint" }, d.active ? "辩论进行中，结束后可以改模型、角色或加人。" : "改动在下次“继续辩论”、“重试失败的发言”或“重新综合”时生效；新加的参会者从下一轮开始发言。")),
     h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
     h("div", { class: "sec" }, h("h3", {}, "失败重试次数"),
       h("div", { class: "row" }, h("input", { type: "number", class: "num", min: 0, max: 5, disabled: d.active,
@@ -865,11 +885,17 @@ function renderPeopleTab(body) {
         h("span", { class: "hint" }, "次；仍失败就跳过，轮到下一位"))),
     h("div", { class: "sec" }, h("h3", {}, "这场辩论"),
       h("div", { class: "hint" }, `${fmtTime(d.created_at)} · ${STATUS_TEXT[d.status] || d.status}`),
-      h("div", { class: "hint" }, `${cfg.blind_round ? "盲写首轮" : "公开首轮"} · 已辩 ${Math.max(0, d.rounds.length - 1)} 轮交叉辩论 · max_tokens ${cfg.max_tokens} · temperature ${cfg.temperature}`),
+      h("div", { class: "hint" }, `${cfg.blind_round ? "盲写首轮" : "公开首轮"} · 已辩 ${Math.max(0, d.rounds.length - 1)} 轮交叉辩论 · 最大输出 ${cfg.max_tokens} tokens · temperature ${cfg.temperature}`),
       h("div", { class: "hint" }, `用量：${u.calls || 0} 次调用，输入 ${u.prompt_tokens || 0} tokens，输出 ${u.completion_tokens || 0} tokens`),
       h("div", { class: "row", style: "margin-top:10px" },
         ...exportLinks(cur.id),
         !d.active ? h("button", { class: "btn small danger", onclick: deleteDebate }, "删除") : null)));
+}
+function addSeat(provider, model) {
+  const cur = S.cur;
+  if (cur.d.config.participants.length + cur.adds.length >= 8) { toast("最多 8 位参会者"); return; }
+  cur.adds.push({ provider, model: model || (byId(provider) || {}).default_model || "", role: "" });
+  renderComposer(); renderRight();
 }
 async function deleteDebate() {
   if (!confirm("确定删除这场辩论的存档吗？此操作不可恢复。")) return;

@@ -27,15 +27,19 @@ TERMINAL_EVENTS = ("debate_done", "debate_cancelled")
 
 # ---------------------------------------------------------------- 提示词模板（6.1）
 
+# 推理模型的“思考”也占输出额度，默认给足（规格原为 1500，常被截断）
+DEFAULT_MAX_TOKENS = 4096
+BREVITY = "篇幅控制在 800 字以内，直接给出观点和理由，不要复述题目，不要输出思考过程。"
+
 BLIND_SYSTEM = (
     "你是一位{role}。请针对以下主题给出你的独立分析和具体建议方案。\n"
-    "要求：结构清晰，给出明确结论和理由；不要提及其他 AI（你现在看不到它们的观点）。"
+    "要求：结构清晰，给出明确结论和理由；不要提及其他 AI（你现在看不到它们的观点）。" + BREVITY
 )
 # 盲写关闭时的首轮：按顺序发言，后发言者能看到先发言者的观点
 # TODO(规格待确认)：规格只说“盲写首轮”可关，没说关掉后首轮怎么跑；这里按“依次公开发言”实现
 OPEN_SYSTEM = (
     "你是一位{role}。请针对以下主题给出你的分析和具体建议方案。\n"
-    "要求：结构清晰，给出明确结论和理由；如果已有其他 AI 发言，可以参考并回应它们的观点。"
+    "要求：结构清晰，给出明确结论和理由；如果已有其他 AI 发言，可以参考并回应它们的观点。" + BREVITY
 )
 SYNTH_SYSTEM = "你是一位中立的综合者，只基于给定的辩论记录做综合，不引入外部知识，不虚构。"
 
@@ -247,7 +251,7 @@ def validate(body: dict) -> dict:
     blind = body.get("blind_round", True)
     blind = blind if isinstance(blind, bool) else str(blind).lower() not in ("0", "false", "off", "no")
     rounds = _num(body.get("debate_rounds"), int, "交叉辩论轮数", 0, MAX_DEBATE_ROUNDS, 2)
-    max_tokens = _num(body.get("max_tokens"), int, "max_tokens", 200, 8000, 1500)
+    max_tokens = _num(body.get("max_tokens"), int, "最大输出长度", 200, providers.MAX_OUTPUT_TOKENS, DEFAULT_MAX_TOKENS)
     temperature = _num(body.get("temperature"), float, "temperature", 0.0, 2.0, 0.7)
     max_retries = _num(body.get("max_retries"), int, "重试次数", 0, MAX_RETRIES, providers.DEFAULT_RETRIES)
 
@@ -368,7 +372,8 @@ class DebateManager:
 
         body: retry_failed（重试失败的发言）、extra_rounds（再追加几轮交叉辩论）、
               user_input（提问者的新补充，放进下一轮每个人的提示里）、
-              participants [{id, model, role}]（换模型/角色，对之后的发言生效）、synthesis {provider, model}
+              participants [{id, model, role}]（换模型/角色，对之后的发言生效）、
+              add_participants [{provider, model, role}]（新加参会者，从下一轮开始发言）、synthesis {provider, model}
         完成后重新综合。
         """
         if self.is_active(debate_id):
@@ -394,6 +399,28 @@ class DebateManager:
                 p["model"] = str(ch["model"]).strip() or providers.default_model(p["provider"])
             if ch.get("role") is not None:
                 p["role"] = str(ch["role"]).strip()
+        adds = body.get("add_participants") or []
+        if not isinstance(adds, list):
+            raise ValidationError("add_participants 必须是数组")
+        if adds and not extra:
+            raise ValidationError("新加的参会者要再辩至少 1 轮才会发言")
+        if len(cfg["participants"]) + len(adds) > MAX_PARTICIPANTS:
+            raise ValidationError(f"最多 {MAX_PARTICIPANTS} 位参会者")
+        taken = {p["id"] for p in cfg["participants"]}
+        for a in adds:
+            pid = str((a or {}).get("provider") or "")
+            try:
+                providers.get_provider(pid)
+            except ProviderError:
+                raise ValidationError(f"未知的 provider：{pid}") from None
+            n, part_id = 1, pid
+            while part_id in taken:
+                n += 1
+                part_id = f"{pid}#{n}"
+            taken.add(part_id)
+            cfg["participants"].append({"id": part_id, "provider": pid,
+                                        "model": str(a.get("model") or "").strip() or providers.default_model(pid),
+                                        "role": str(a.get("role") or "").strip()})
         if body.get("max_retries") is not None:
             cfg["max_retries"] = _num(body.get("max_retries"), int, "重试次数", 0, MAX_RETRIES, providers.DEFAULT_RETRIES)
         syn = body.get("synthesis")
@@ -551,8 +578,8 @@ class DebateManager:
         def on_retry(note, wait=0):
             run.emit("synthesis_retry", {"note": note, "retry_at": _retry_at(wait)})
 
-        # TODO(规格待确认)：综合报告较长，max_tokens 至少给 2000，避免四个章节被截断；温度不高于 0.7 以求忠实
-        max_tokens = max(d["config"]["max_tokens"], 2000)
+        # TODO(规格待确认)：综合报告较长，max_tokens 至少给 DEFAULT_MAX_TOKENS，避免四个章节被截断；温度不高于 0.7 以求忠实
+        max_tokens = max(d["config"]["max_tokens"], DEFAULT_MAX_TOKENS)
         temperature = min(d["config"]["temperature"], 0.7)
         user = synth_user(build_transcript(d))
         errors = []

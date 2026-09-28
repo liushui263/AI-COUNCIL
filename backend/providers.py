@@ -26,6 +26,7 @@ log = logging.getLogger("ai-council.providers")
 
 CONNECT_TIMEOUT = 10
 BACKOFF = (2, 8, 20)  # 429/5xx 没有等待提示时的退避秒数（第 n 次重试用第 n 个，超出用最后一个）
+MAX_OUTPUT_TOKENS = 16384
 DEFAULT_RETRIES = 2   # 每次发言遇到限流/过载/网络错误时最多重试几次，辩论里可在高级参数中调
 MAX_WAIT = 65         # 单次最多等多久；超过（如每日额度用完）就不等了
 READ_TIMEOUT = 120
@@ -405,9 +406,7 @@ def _openai_chat_once(p, url, key, body, stream, on_token):
         if isinstance(text, list):  # 少数兼容实现返回分段内容
             text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
         fin = choices[0].get("finish_reason")
-        if fin == "length":
-            text += "\n\n[因 max_tokens 上限被截断]"
-        return {"text": text, "usage": _openai_usage(data.get("usage"))}
+        return {"text": text, "usage": _openai_usage(data.get("usage")), "truncated": fin == "length"}
 
     parts, usage, fin = [], None, None
     for _event, data_str in _iter_sse(resp, key):
@@ -429,13 +428,7 @@ def _openai_chat_once(p, url, key, body, stream, on_token):
                     on_token(delta)
             if ch.get("finish_reason"):
                 fin = ch["finish_reason"]
-    text = "".join(parts)
-    if fin == "length":
-        tail = "\n\n[因 max_tokens 上限被截断]"
-        text += tail
-        if on_token:
-            on_token(tail)
-    return {"text": text, "usage": usage}
+    return {"text": "".join(parts), "usage": usage, "truncated": fin == "length"}
 
 
 def _openai_usage(u):
@@ -455,10 +448,14 @@ def _chat_openai(p, model, system, user, max_tokens, temperature, stream, on_tok
     }
     if stream and p["id"] in ("openai", "groq", "deepseek", "openrouter", "xai"):
         body["stream_options"] = {"include_usage": True}
+    body.update(_reasoning_params(p["id"], model))
     url = p["base_url"].rstrip("/") + "/chat/completions"
     try:
         return _openai_chat_once(p, url, key, body, stream, on_token)
     except ProviderError as e:
+        # 个别模型不认识思考强度参数：去掉再试一次
+        if e.status == 400 and ("reasoning" in e.msg.lower()) and _drop_reasoning(body):
+            return _chat_openai_retry(p, url, key, body, stream, on_token)
         # 新一代 OpenAI 推理模型不接受 max_tokens / temperature：按错误提示自动调整一次
         low = e.msg.lower()
         if e.status == 400 and ("max_completion_tokens" in low or "temperature" in low):
@@ -472,6 +469,42 @@ def _chat_openai(p, model, system, user, max_tokens, temperature, stream, on_tok
             log.warning("%s 新端点失败（%s），切换到备用端点", p["id"], e.msg)
             return _openai_chat_once(p, p["fallback_chat_url"], key, body, stream, on_token)
         raise
+
+
+def _chat_openai_retry(p, url, key, body, stream, on_token):
+    try:
+        return _openai_chat_once(p, url, key, body, stream, on_token)
+    except ProviderError as e:
+        low = e.msg.lower()
+        if e.status == 400 and ("max_completion_tokens" in low or "temperature" in low):
+            if "max_completion_tokens" in low:
+                body["max_completion_tokens"] = body.pop("max_tokens")
+            if "temperature" in low:
+                body.pop("temperature", None)
+            return _openai_chat_once(p, url, key, body, stream, on_token)
+        raise
+
+
+# 推理模型会先“思考”，思考用的 token 也算在输出上限里；免费档额度小，思考太多正文就被截断。
+# 能控制的就把思考强度调低（辩论要的是观点，不是长推理）。
+def _reasoning_params(pid: str, model: str) -> dict:
+    m = model.lower()
+    if pid == "groq":
+        if "gpt-oss" in m:
+            return {"reasoning_effort": "low"}
+        if "qwen3" in m:
+            return {"reasoning_effort": "none"}
+    elif pid == "openai" and re.match(r"^(o\d|gpt-5)", m):
+        return {"reasoning_effort": "low"}
+    elif pid == "xai" and "grok-3-mini" in m:
+        return {"reasoning_effort": "low"}
+    elif pid == "openrouter":
+        return {"reasoning": {"effort": "low"}}  # 不支持思考的模型会忽略
+    return {}
+
+
+def _drop_reasoning(body: dict) -> bool:
+    return bool(body.pop("reasoning_effort", None) or body.pop("reasoning", None))
 
 
 # ---------------------------------------------------------------- B. Gemini native
@@ -498,8 +531,23 @@ def _chat_gemini(p, model, system, user, max_tokens, temperature, stream, on_tok
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
+        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature,
+                             # 限制思考预算，给正文留出长度（不支持思考的模型报错时去掉重试）
+                             "thinkingConfig": {"thinkingBudget": GEMINI_THINKING_BUDGET}},
     }
+    try:
+        return _chat_gemini_once(p, model, body, stream, on_token, key)
+    except ProviderError as e:
+        if e.status == 400 and "think" in e.msg.lower():
+            body["generationConfig"].pop("thinkingConfig", None)
+            return _chat_gemini_once(p, model, body, stream, on_token, key)
+        raise
+
+
+GEMINI_THINKING_BUDGET = 512
+
+
+def _chat_gemini_once(p, model, body, stream, on_token, key):
     m = urllib.parse.quote(model.removeprefix("models/"), safe="-._:")
     base = p["base_url"].rstrip("/")
     qk = urllib.parse.quote(key, safe="")
@@ -529,12 +577,12 @@ def _chat_gemini(p, model, system, user, max_tokens, temperature, stream, on_tok
             fin = f or fin
             usage = _gemini_usage(chunk) or usage
         text = "".join(parts)
-    if fin and fin != "STOP":
+    if fin and fin not in ("STOP", "MAX_TOKENS"):
         tail = f"\n\n[生成未正常结束：finishReason={fin}]"
         text += tail
         if stream and on_token:
             on_token(tail)
-    return {"text": text, "usage": usage}
+    return {"text": text, "usage": usage, "truncated": fin == "MAX_TOKENS"}
 
 
 # ---------------------------------------------------------------- C. Anthropic native
@@ -557,10 +605,9 @@ def _chat_anthropic(p, model, system, user, max_tokens, temperature, stream, on_
         data = _read_json(_open(url, _anthropic_headers(key), body, key), key)
         text = "".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
         u = data.get("usage") or {}
-        if data.get("stop_reason") == "max_tokens":
-            text += "\n\n[因 max_tokens 上限被截断]"
         return {"text": text, "usage": {"prompt_tokens": int(u.get("input_tokens") or 0),
-                                         "completion_tokens": int(u.get("output_tokens") or 0)}}
+                                         "completion_tokens": int(u.get("output_tokens") or 0)},
+                "truncated": data.get("stop_reason") == "max_tokens"}
 
     body["stream"] = True
     parts, pin, pout, stop = [], 0, 0, None
@@ -588,13 +635,8 @@ def _chat_anthropic(p, model, system, user, max_tokens, temperature, stream, on_
             err = d.get("error") or {}
             retry = err.get("type") in ("overloaded_error", "rate_limit_error", "api_error")
             raise ProviderError(_scrub(f"Anthropic 错误：{err.get('message') or data_str[:200]}", key), retryable=retry)
-    text = "".join(parts)
-    if stop == "max_tokens":
-        tail = "\n\n[因 max_tokens 上限被截断]"
-        text += tail
-        if on_token:
-            on_token(tail)
-    return {"text": text, "usage": {"prompt_tokens": pin, "completion_tokens": pout}}
+    return {"text": "".join(parts), "usage": {"prompt_tokens": pin, "completion_tokens": pout},
+            "truncated": stop == "max_tokens"}
 
 
 _CHAT_BY_KIND = {"openai": _chat_openai, "gemini": _chat_gemini, "anthropic": _chat_anthropic}
@@ -620,10 +662,10 @@ def chat(provider_id: str, model: str, system: str, user: str,
     # TODO(规格待确认)：规格写 429 退避 1s、4s 最多 2 次。这里优先按服务端提示的时间等（免费档常要 30s 左右），
     # 没提示就按 BACKOFF 退避；重试次数由 max_retries 控制（默认 2），单次最多等 MAX_WAIT 秒。
     limit = DEFAULT_RETRIES if max_retries is None else max(0, int(max_retries))
-    tries = 0
+    tries, budget, grown = 0, int(max_tokens), False
     while True:
         try:
-            return fn(p, model, system, user, int(max_tokens), float(temperature), stream, on_token, key)
+            res = fn(p, model, system, user, budget, float(temperature), stream, on_token, key)
         except ProviderError as e:
             busy = e.status == 429 or (e.status is not None and e.status >= 500)
             net = e.status is None and e.retryable
@@ -648,6 +690,24 @@ def chat(provider_id: str, model: str, system: str, user: str,
             if busy or net:
                 e.msg = f"{e.msg}（已重试 {tries} 次）"
             raise
+        if res.pop("truncated", False):
+            # 被输出上限截断（推理模型常把额度花在思考上）：加大一次上限重来
+            bigger = min(max(budget * 2, 4096), MAX_OUTPUT_TOKENS)
+            if not grown and bigger > budget:
+                grown = True
+                log.info("%s/%s 输出被截断（上限 %s），加大到 %s 重试", provider_id, model, budget, bigger)
+                if on_retry:
+                    on_retry(f"输出被截断（上限 {budget} tokens），加大到 {bigger} 重新生成", 0)
+                budget = bigger
+                continue
+            if not res["text"].strip():
+                raise ProviderError(f"输出上限 {budget} tokens 都用在了模型的思考过程上，没有给出正文。"
+                                    "可以在“高级参数”里调大最大输出长度，或换一个非推理模型")
+            tail = f"\n\n[因输出上限（{budget} tokens）被截断]"
+            res["text"] += tail
+            if stream and on_token:
+                on_token(tail)
+        return res
 
 
 # ---------------------------------------------------------------- 模型列表刷新

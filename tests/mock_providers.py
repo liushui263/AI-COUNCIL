@@ -5,6 +5,9 @@
   always-429   → 一直 429
   slow         → 每个 token 间隔 0.2s（用于测试取消）
   always-503   → 一直 503 过载
+  trunc*       → max_tokens < 4096 时 finish_reason=length（模拟被截断）
+  think-only   → 永远 length 且正文为空（模拟思考用光额度）
+  reject-reasoning* → 带思考强度参数时返回 400
   fail-once*   → 同名模型第一次调用返回 503（带 Retry-After: 0），之后正常
 其余模型正常返回；system 里含“综合者”时返回带四个固定章节的综合报告。
 收到的请求都记录在 MockHandler.requests 里，便于断言（如盲写轮互不引用）。
@@ -135,15 +138,21 @@ class MockHandler(BaseHTTPRequestHandler):
         model = body["model"]
         if self._common(model):
             return
+        if "reject-reasoning" in model and ("reasoning_effort" in body or "reasoning" in body):
+            return self._json(400, {"error": {"message": "reasoning_effort is not supported with this model"}})
         msgs = body["messages"]
         text = _answer(msgs[0]["content"], msgs[1]["content"], model)
         usage = {"prompt_tokens": 11, "completion_tokens": 22}
+        fin = "stop"
+        # trunc*：输出上限小于 4096 时被截断；think-only：思考用光额度，正文为空
+        if (model.startswith("trunc") and body.get("max_tokens", 0) < 4096) or model == "think-only":
+            text, fin = ("" if model == "think-only" else text[:4]), "length"
         if not body.get("stream"):
-            return self._json(200, {"choices": [{"message": {"content": text}, "finish_reason": "stop"}], "usage": usage})
+            return self._json(200, {"choices": [{"message": {"content": text}, "finish_reason": fin}], "usage": usage})
         self._sse_start()
         for c in self._chunks(text, model):
             self._sse({"choices": [{"delta": {"content": c}}]})
-        self._sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+        self._sse({"choices": [{"delta": {}, "finish_reason": fin}]})
         self._sse({"choices": [], "usage": usage})
         self._sse("[DONE]")
 
