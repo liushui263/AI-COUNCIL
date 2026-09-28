@@ -42,10 +42,11 @@ def main() -> None:
 
     # 没指定 --port 时从 8000 起自动找可用端口：Windows 上 8000 常被占用或落在系统保留端口段（WinError 10013），
     # 在 WSL 里跑着的另一份实例也会占住 Windows 的 8000
-    ports = [args.port] if args.port else list(range(DEFAULT_PORT, DEFAULT_PORT + 11))
+    # 最后用 0 让系统分配一个随机可用端口：Hyper-V/WSL/Docker 常把 8000、8080 一带整段保留掉
+    ports = [args.port] if args.port else list(range(DEFAULT_PORT, DEFAULT_PORT + 11)) + [0]
     httpd, errors, other_running = None, [], False
     for port in ports:
-        if server.port_in_use("127.0.0.1", port):
+        if port and server.port_in_use("127.0.0.1", port):
             other_running = True
             errors.append(f"{port}：已被占用（可能是上次启动的 AI 议事厅还没关，包括在 WSL 里启动的那份）")
             continue
@@ -53,7 +54,8 @@ def main() -> None:
             httpd = server.make_server(host, port, extra)
             break
         except OSError as e:
-            errors.append(f"{port}：无法监听（{e}；Windows 上可能是系统保留端口）")
+            errors.append(f"{port or '系统分配的端口'}：无法监听（{e}；Windows 上可能是系统保留端口，"
+                          "可用 netsh interface ipv4 show excludedportrange protocol=tcp 查看）")
     if not httpd:
         sys.exit("找不到可用端口：\n  " + "\n  ".join(errors) + "\n可以用 --port 指定其他端口，例如 python app.py --port 18000")
     port = httpd.server_address[1]
