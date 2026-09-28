@@ -355,6 +355,40 @@ class OfflineE2E(unittest.TestCase):
         st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"extra_rounds": 99})
         self.assertEqual(st, 409)
 
+    def test_17_continue_with_input_and_model_change(self):
+        mock_providers.MockHandler.requests.clear()
+        body = {"topic": "对话式续辩", "debate_rounds": 0, "participants": [
+            {"provider": "groq", "model": "old-a"}, {"provider": "gemini", "model": "old-b"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        did = r["debate_id"]
+        self.events(did)
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {
+            "extra_rounds": 2, "user_input": "预算只有 2800，怎么选？",
+            "participants": [{"id": "groq", "model": "new-a"}],
+            "synthesis": {"provider": "gemini", "model": "new-s"}})
+        self.assertEqual(st, 202, r)
+        self.events(did)
+        d = store.load_debate(did)
+        self.assertEqual(len(d["rounds"]), 3)
+        self.assertEqual(d["rounds"][1]["messages"][0]["model"], "new-a")
+        self.assertEqual(d["inputs"][0]["before_round"], 1)
+        self.assertEqual(len(d["syntheses"]), 2)
+        self.assertEqual(d["synthesis"]["by"], "gemini/new-s")
+        reqs = mock_providers.MockHandler.requests
+        def ut(rq):
+            b = rq["body"]
+            return b["messages"][-1]["content"] if "messages" in b else b["contents"][0]["parts"][0]["text"]
+        r1 = [rq for rq in reqs if "预算只有 2800" in ut(rq) and "以下是其他 AI" in ut(rq)]
+        self.assertEqual(len(r1), 2)  # 第 1 轮两位都收到了补充
+        self.assertIn("上一次综合报告", ut(r1[0]))
+        synth = [rq for rq in reqs if "综合报告（Markdown）" in ut(rq)][-1]
+        self.assertIn("提问者在第 1 轮之前补充", ut(synth))
+        # 总轮数不设上限：再追加 10 轮以上也允许（分多次）
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"extra_rounds": 11})
+        self.assertEqual(st, 409)
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"user_input": "x"})
+        self.assertEqual(st, 409)
+
     def test_16_quote_trim(self):
         u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])
         self.assertLess(len(u), 3400)

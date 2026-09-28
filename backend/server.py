@@ -234,7 +234,7 @@ def export_markdown(d: dict) -> str:
     lines.append(f"- 状态：{d.get('status', '')}")
     lines.append("- 参会者：" + "；".join(
         f"{p['id']}（{p['model']}，{p['role'] or debate_mod.DEFAULT_ROLE}）" for p in cfg["participants"]))
-    lines.append(f"- 轮次：{'盲写首轮 + ' if cfg['blind_round'] else '公开首轮 + '}{cfg['debate_rounds']} 轮交叉辩论")
+    lines.append(f"- 轮次：{'盲写首轮 + ' if cfg['blind_round'] else '公开首轮 + '}{max(0, len(d.get('rounds', [])) - 1)} 轮交叉辩论")
     lines.append(f"- 综合者：{cfg['synthesis']['provider']}/{cfg['synthesis']['model']}")
     lines.append(f"- 用量：{u['calls']} 次调用，输入 {u['prompt_tokens']} tokens，输出 {u['completion_tokens']} tokens")
     lines.append("")
@@ -251,6 +251,9 @@ def export_markdown(d: dict) -> str:
         lines.append(f"（未生成{('：' + syn['error']) if syn.get('error') else ''}）")
     lines += ["", "## 辩论记录", ""]
     for rnd in d.get("rounds", []):
+        extra = debate_mod.input_before(d, rnd["index"])
+        if extra:
+            lines += [f"### 提问者补充（第 {rnd['index']} 轮之前）", "", extra, ""]
         lines += [f"### {debate_mod.round_title(rnd['index'], cfg['blind_round'])}", ""]
         for m in rnd["messages"]:
             lines.append(f"#### {m['participant']}（{m['model']}，{m.get('role') or debate_mod.DEFAULT_ROLE}）")

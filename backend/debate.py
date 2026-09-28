@@ -17,8 +17,9 @@ log = logging.getLogger("ai-council.debate")
 
 MIN_PARTICIPANTS, MAX_PARTICIPANTS = 2, 8
 MAX_DEBATE_ROUNDS = 5
-MAX_TOTAL_ROUNDS = 15   # 从历史继续辩论时，交叉辩论累计上限
 QUOTE_LIMIT = 3000      # 交叉轮引用他人发言时每段最多字符数，控制 token（免费档常按分钟限 token）
+REPORT_LIMIT = 2000     # 续辩时附带的上一次综合报告最多字符数
+MAX_EXTRA_ROUNDS = 10   # 单次续辩最多追加的轮数；总轮数不设上限
 DEFAULT_ROLE = "中立客观的专家"
 TERMINAL_EVENTS = ("debate_done", "debate_cancelled")
 
@@ -62,8 +63,16 @@ def open_user(topic: str, background: str, earlier: list) -> str:
     return "\n".join(lines)
 
 
-def cross_user(topic: str, others: list) -> str:
-    parts = [f"主题：{topic}", "", "以下是其他 AI 在上一轮的观点：", ""]
+def cross_user(topic: str, others: list, user_input: str = "", last_report: str = "") -> str:
+    parts = [f"主题：{topic}", ""]
+    if user_input.strip():
+        parts += ["提问者在这一轮之前补充了新的内容或问题：", user_input.strip(), ""]
+        if last_report.strip():
+            rep = last_report.strip()
+            if len(rep) > REPORT_LIMIT:
+                rep = rep[:REPORT_LIMIT] + "……（后文略）"
+            parts += ["上一次综合报告（供参考）：", rep, ""]
+    parts += ["以下是其他 AI 在上一轮的观点：", ""]
     if others:
         for m in others:
             text = m["text"]
@@ -78,7 +87,16 @@ def cross_user(topic: str, others: list) -> str:
         "2) 指出你反对或认为有漏洞的部分及原因；",
         "3) 给出修正后的最终建议。如无修正必要，说明原因并维持原方案。",
     ]
+    if user_input.strip():
+        parts.append("4) 务必正面回应提问者的新补充。")
     return "\n".join(parts)
+
+
+def input_before(debate: dict, idx: int) -> str:
+    for it in debate.get("inputs") or []:
+        if it.get("before_round") == idx:
+            return it.get("text") or ""
+    return ""
 
 
 def build_transcript(debate: dict) -> str:
@@ -87,6 +105,9 @@ def build_transcript(debate: dict) -> str:
     participants = debate["config"]["participants"]
     ever_ok = set()
     for rnd in debate["rounds"]:
+        extra = input_before(debate, rnd["index"])
+        if extra:
+            out.append(f"=== 提问者在第 {rnd['index']} 轮之前补充 ===\n{extra}\n")
         title = round_title(rnd["index"], debate["config"]["blind_round"])
         out.append(f"=== {title} ===\n")
         for m in rnd["messages"]:
@@ -288,7 +309,13 @@ class DebateManager:
         run.thread.start()
 
     def resume(self, debate_id: str, body: dict) -> None:
-        """从历史里重新开启一场辩论：重试失败的发言，和/或再追加几轮交叉辩论，然后重新综合。"""
+        """从历史里重新开启一场辩论（总轮数不设上限）。
+
+        body: retry_failed（重试失败的发言）、extra_rounds（再追加几轮交叉辩论）、
+              user_input（提问者的新补充，放进下一轮每个人的提示里）、
+              participants [{id, model, role}]（换模型/角色，对之后的发言生效）、synthesis {provider, model}
+        完成后重新综合。
+        """
         if self.is_active(debate_id):
             raise ValidationError("辩论仍在进行中，请等待结束或先取消")
         debate = store.load_debate(debate_id)
@@ -296,15 +323,38 @@ class DebateManager:
             raise KeyError(debate_id)
         body = body or {}
         retry = bool(body.get("retry_failed"))
-        extra = _num(body.get("extra_rounds"), int, "追加轮数", 0, MAX_DEBATE_ROUNDS, 0)
+        extra = _num(body.get("extra_rounds"), int, "追加轮数", 0, MAX_EXTRA_ROUNDS, 0)
+        user_input = str(body.get("user_input") or "").strip()
+        if user_input and not extra:
+            raise ValidationError("补充了新内容时，至少要再辩论 1 轮")
         cfg = debate["config"]
-        if cfg["debate_rounds"] + extra > MAX_TOTAL_ROUNDS:
-            raise ValidationError(f"交叉辩论总轮数最多 {MAX_TOTAL_ROUNDS} 轮")
+
+        by_id = {p["id"]: p for p in cfg["participants"]}
+        for ch in body.get("participants") or []:
+            p = by_id.get(str(ch.get("id") or ""))
+            if not p:
+                raise ValidationError(f"找不到参会者：{ch.get('id')}")
+            if ch.get("model") is not None:
+                p["model"] = str(ch["model"]).strip() or providers.default_model(p["provider"])
+            if ch.get("role") is not None:
+                p["role"] = str(ch["role"]).strip()
+        syn = body.get("synthesis")
+        if isinstance(syn, dict) and syn.get("provider"):
+            try:
+                providers.get_provider(str(syn["provider"]))
+            except ProviderError:
+                raise ValidationError(f"未知的综合者 provider：{syn['provider']}") from None
+            cfg["synthesis"] = {"provider": str(syn["provider"]),
+                                "model": str(syn.get("model") or "").strip() or providers.default_model(str(syn["provider"]))}
+
         missing = sorted({providers.get_provider(p["provider"])["name"] for p in cfg["participants"]
                           if not providers.key_ok(p["provider"])})
         if missing:
             raise ValidationError(f"以下 provider 的 key 尚未配置：{'、'.join(missing)}。请先到设置页配置")
-        cfg["debate_rounds"] += extra
+        if user_input:
+            debate.setdefault("inputs", []).append(
+                {"before_round": len(debate["rounds"]), "text": user_input, "at": store.now_iso()})
+        cfg["debate_rounds"] = max(cfg["debate_rounds"], len(debate["rounds"]) - 1) + extra
         debate["status"] = "running"
         debate.pop("error", None)
         self._save(debate)
@@ -374,7 +424,12 @@ class DebateManager:
             return system, blind_user(d["topic"], d["background"])
         # 上下文裁剪：只带“其他人上一轮”的发言
         others = [x for x in prev["messages"] if x["status"] == "ok" and x["participant"] != m["participant"]]
-        return system, cross_user(d["topic"], others)
+        extra = input_before(d, idx)
+        last_report = ""
+        if extra:
+            reps = [r for r in d.get("syntheses") or [] if r.get("after_round", -1) < idx]
+            last_report = reps[-1]["text"] if reps else ""
+        return system, cross_user(d["topic"], others, extra, last_report)
 
     def _run_round(self, run: Run, rnd: dict, prev: dict | None, only: set | None = None) -> None:
         """跑一轮；only 给定时只（重新）调用这些参会者。"""
@@ -449,9 +504,16 @@ class DebateManager:
                 text = (res.get("text") or "").strip()
                 if not text:
                     raise ProviderError("综合者返回了空内容")
-                d["synthesis"] = {"text": text, "by": by, "status": "ok", "usage": res.get("usage")}
+                d["synthesis"] = {"text": text, "by": by, "status": "ok", "usage": res.get("usage"),
+                                  "after_round": len(d["rounds"]) - 1, "at": store.now_iso()}
                 if errors:
                     d["synthesis"]["fallback_from"] = errors
+                # 保留每次综合的历史；同一进度上重新综合则替换最后一份
+                hist = d.setdefault("syntheses", [])
+                if hist and hist[-1].get("after_round") == d["synthesis"]["after_round"]:
+                    hist[-1] = d["synthesis"]
+                else:
+                    hist.append(d["synthesis"])
                 run.emit("synthesis_done", {"text": text, "by": by, "usage": res.get("usage")})
                 return True
             except Exception as e:  # noqa: BLE001
@@ -478,6 +540,10 @@ class DebateManager:
                     failed = {m["participant"] for m in rnd["messages"] if m["status"] != "ok"}
                     if not failed:
                         continue
+                    cur = {p["id"]: p for p in cfg["participants"]}
+                    for m in rnd["messages"]:
+                        if m["participant"] in failed and m["participant"] in cur:
+                            m["model"], m["role"] = cur[m["participant"]]["model"], cur[m["participant"]]["role"]
                     run.emit("round_started", {"round": rnd["index"], "title": round_title(rnd["index"], cfg["blind_round"]),
                                                "retry": True})
                     self._run_round(run, rnd, d["rounds"][i - 1] if i else None, only=failed)

@@ -6,86 +6,139 @@
 <title>AI 议事厅</title>
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --text: #1d2129; --muted: #6b7280; --border: #e3e6ea;
-  --accent: #2563eb; --accent-text: #ffffff; --ok: #16a34a; --fail: #dc2626; --run: #2563eb;
-  --wait: #9ca3af; --warn-bg: #fef9c3; --warn-text: #854d0e; --err-bg: #fee2e2; --err-text: #991b1b;
-  --code-bg: #f1f3f5; --shadow: 0 1px 2px rgba(0,0,0,.05);
+  --bg: #faf9f7; --side: #f3f1ed; --panel: #ffffff; --text: #1f1e1c; --muted: #6f6b66; --border: #e5e2dc;
+  --accent: #c2410c; --accent-soft: #fbe9df; --accent-text: #ffffff; --ok: #15803d; --fail: #dc2626; --run: #2563eb;
+  --wait: #a8a29e; --warn-bg: #fef3c7; --warn-text: #854d0e; --err-bg: #fee2e2; --err-text: #991b1b;
+  --code-bg: #f1efeb; --user-bg: #efece6; --shadow: 0 1px 2px rgba(0,0,0,.05);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111318; --panel: #1a1d24; --text: #e6e8eb; --muted: #9aa1ac; --border: #2c313a;
-    --accent: #4f8cff; --accent-text: #0b0d12; --ok: #22c55e; --fail: #f87171; --run: #60a5fa;
-    --wait: #6b7280; --warn-bg: #3b3210; --warn-text: #fde68a; --err-bg: #3b1515; --err-text: #fecaca;
-    --code-bg: #232731; --shadow: none;
+    --bg: #1f1e1c; --side: #181715; --panel: #262523; --text: #ecebe8; --muted: #a29e97; --border: #3a3834;
+    --accent: #f08a5d; --accent-soft: #3a2a22; --accent-text: #1b1310; --ok: #4ade80; --fail: #f87171; --run: #60a5fa;
+    --wait: #78716c; --warn-bg: #3b3210; --warn-text: #fde68a; --err-bg: #3b1515; --err-text: #fecaca;
+    --code-bg: #2f2d2a; --user-bg: #33312d; --shadow: none;
   }
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; background: var(--bg); color: var(--text);
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
   font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--border); }
-.bar { max-width: 1040px; margin: 0 auto; padding: 10px 16px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
-.brand { font-weight: 700; font-size: 17px; }
-nav { display: flex; gap: 4px; overflow-x: auto; }
-nav button { background: none; border: 0; color: var(--muted); padding: 6px 12px; border-radius: 6px; font: inherit; cursor: pointer; white-space: nowrap; }
-nav button.active { background: var(--code-bg); color: var(--text); font-weight: 600; }
-main { max-width: 1040px; margin: 0 auto; padding: 16px; }
-.view { display: none; } .view.active { display: block; }
-.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
-h2 { font-size: 17px; margin: 0 0 12px; } h3 { font-size: 15px; margin: 0 0 8px; }
-label.field { display: block; font-weight: 600; margin-bottom: 4px; }
-.hint { color: var(--muted); font-size: 13px; }
-input[type=text], input[type=password], input[type=number], textarea, select {
-  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg); color: var(--text); font: inherit; min-width: 0; }
-textarea { resize: vertical; }
-input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.btn { display: inline-block; text-decoration: none; font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
-  background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--accent); }
+
+/* ---------- 三栏布局 ---------- */
+.app { display: grid; grid-template-columns: 260px minmax(0, 1fr) 380px; height: 100vh; height: 100dvh; }
+.app.no-right { grid-template-columns: 260px minmax(0, 1fr) 0; }
+.app.no-right .right { display: none; }
+.left { background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.right { background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+@media (max-width: 1180px) { .app { grid-template-columns: 230px minmax(0, 1fr) 330px; } .app.no-right { grid-template-columns: 230px minmax(0, 1fr) 0; } }
+@media (max-width: 880px) {
+  .app, .app.no-right { grid-template-columns: minmax(0, 1fr); }
+  .left, .right { position: fixed; top: 0; bottom: 0; z-index: 30; width: min(86vw, 360px); transition: transform .2s; box-shadow: 0 0 24px rgba(0,0,0,.2); }
+  .left { left: 0; transform: translateX(-105%); }
+  .right { right: 0; transform: translateX(105%); }
+  .app.no-right .right { display: flex; }
+  body.show-left .left, body.show-right .right { transform: none; }
+  body.show-left .scrim, body.show-right .scrim { display: block; }
+}
+.scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 25; }
+.only-narrow { display: none !important; }
+@media (max-width: 880px) { .only-narrow { display: inline-flex !important; } }
+
+/* ---------- 左栏 ---------- */
+.left-top { padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 10px; }
+.brand { font-weight: 700; font-size: 17px; padding: 0 6px; }
+.new-btn { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel); cursor: pointer; font-weight: 600; }
+.new-btn:hover { border-color: var(--accent); }
+.hist-title { font-size: 12px; color: var(--muted); padding: 8px 18px 4px; }
+.hist { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.hist-item { display: flex; gap: 8px; align-items: center; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.hist-item:hover { background: var(--code-bg); }
+.hist-item.active { background: var(--accent-soft); }
+.hist-item .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.left-foot { border-top: 1px solid var(--border); padding: 8px; }
+.nav-btn { width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.nav-btn:hover, .nav-btn.active { background: var(--code-bg); }
+
+/* ---------- 中栏 ---------- */
+.mid-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); min-height: 52px; }
+.mid-head .title { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mid-body { flex: 1; overflow-y: auto; padding: 20px 16px 28px; }
+.col { max-width: 780px; margin: 0 auto; }
+.composer-wrap { padding: 0 16px 14px; }
+.composer { max-width: 780px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 10px 12px; box-shadow: 0 2px 10px rgba(0,0,0,.05); }
+.composer textarea { width: 100%; border: 0; background: transparent; resize: none; outline: none; padding: 4px 2px; min-height: 48px; max-height: 40vh; }
+.composer-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+.composer-bar .spacer { flex: 1; }
+.hero { text-align: center; padding: 8vh 0 18px; }
+.hero h1 { font-size: 26px; font-weight: 600; margin: 0 0 8px; font-family: Georgia, "Songti SC", "SimSun", serif; }
+
+/* 对话流 */
+.bubble-user { margin: 14px 0 14px auto; max-width: 85%; width: fit-content; background: var(--user-bg); padding: 10px 14px;
+  border-radius: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bubble-user .lbl { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.round-sep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 22px 0 10px; }
+.round-sep::before, .round-sep::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.msg { display: flex; gap: 10px; margin: 12px 0; }
+.avatar { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; }
+.msg-main { flex: 1; min-width: 0; }
+.msg-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.msg-head .who { font-weight: 600; }
+.msg-head .meta { color: var(--muted); font-size: 12px; }
+.msg-body { overflow-wrap: anywhere; }
+.msg-body.plain { white-space: pre-wrap; }
+.msg-foot { color: var(--muted); font-size: 12px; }
+.report-chip { display: flex; gap: 10px; align-items: center; margin: 16px 0; padding: 12px 14px; border: 1px solid var(--accent);
+  background: var(--accent-soft); border-radius: 12px; cursor: pointer; }
+.report-chip .t { font-weight: 600; flex: 1; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--wait); flex: none; display: inline-block; }
+.dot.running { background: var(--run); animation: pulse 1s infinite; }
+.dot.ok, .dot.done { background: var(--ok); } .dot.failed { background: var(--fail); }
+.dot.partial, .dot.cancelled, .dot.interrupted { background: #d97706; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+/* ---------- 右栏 ---------- */
+.tabs { display: flex; gap: 4px; padding: 10px 12px 0; border-bottom: 1px solid var(--border); }
+.tabs button { background: none; border: 0; padding: 8px 12px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+.tabs button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .x { margin-left: auto; }
+.right-body { flex: 1; overflow-y: auto; padding: 14px; }
+.sec { margin-bottom: 18px; }
+.sec h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
+.seat { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
+.seat.off { opacity: .65; }
+.seat-top { display: flex; gap: 8px; align-items: center; }
+.seat-top .name { font-weight: 600; flex: 1; min-width: 0; }
+.seat-fields { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 6px; }
+.seat.off .seat-fields { display: none; }
+
+/* ---------- 通用控件 ---------- */
+input[type=text], input[type=password], input[type=number], textarea.box, select {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); min-width: 0; }
+input:focus, textarea.box:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer; white-space: nowrap; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 .btn.danger { color: var(--fail); }
+.btn.small { padding: 3px 9px; font-size: 13px; }
+.btn.icon { padding: 4px 8px; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn.small { padding: 3px 10px; font-size: 13px; }
-.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .grow { flex: 1 1 auto; min-width: 0; }
-.stack > * + * { margin-top: 12px; }
-.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
-.badge.ok { color: var(--ok); border-color: var(--ok); }
-.badge.fail { color: var(--fail); border-color: var(--fail); }
+.hint { color: var(--muted); font-size: 13px; }
+.badge { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.badge.ok { color: var(--ok); border-color: var(--ok); } .badge.fail { color: var(--fail); border-color: var(--fail); }
 .badge.free { color: var(--accent); border-color: var(--accent); }
-a { color: var(--accent); }
-.warn { background: var(--warn-bg); color: var(--warn-text); padding: 8px 12px; border-radius: 6px; font-size: 14px; }
-.err { background: var(--err-bg); color: var(--err-text); padding: 8px 12px; border-radius: 6px; font-size: 14px; white-space: pre-wrap; }
-.plist { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.prow { display: grid; grid-template-columns: 26px 150px minmax(0,1fr) minmax(0,.8fr) auto; gap: 10px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--border); }
-.prow:first-child { border-top: 0; }
-.prow.off .pmodel, .prow.off .prole { opacity: .45; }
-.pname { font-weight: 600; display: flex; flex-direction: column; line-height: 1.3; }
-.pname .badge { align-self: flex-start; margin-top: 2px; }
-.pactions { display: flex; gap: 6px; align-items: center; }
-@media (max-width: 720px) {
-  .prow { grid-template-columns: 26px minmax(0,1fr) auto; }
-  .prow .pmodel, .prow .prole { grid-column: 2 / 4; }
-}
-.toggle { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
-.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-.stepper button { border: 0; background: var(--code-bg); color: var(--text); width: 32px; height: 32px; font-size: 18px; cursor: pointer; }
-.stepper span { width: 36px; text-align: center; font-weight: 600; }
-details.adv summary { cursor: pointer; color: var(--muted); }
-.round { margin-bottom: 18px; }
-.round-title { font-weight: 700; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px; min-width: 0; }
-.card-head { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; flex-wrap: wrap; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--wait); flex: none; }
-.dot.running { background: var(--run); animation: pulse 1s infinite; }
-.dot.ok { background: var(--ok); } .dot.failed { background: var(--fail); }
-@keyframes pulse { 50% { opacity: .3; } }
-.card-meta { color: var(--muted); font-size: 12px; }
-.card-body { font-size: 14px; max-height: 420px; overflow: auto; overflow-wrap: anywhere; }
-.card-body.plain { white-space: pre-wrap; }
+.warn { background: var(--warn-bg); color: var(--warn-text); padding: 7px 10px; border-radius: 8px; font-size: 13px; }
+.err { background: var(--err-bg); color: var(--err-text); padding: 7px 10px; border-radius: 8px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.num { width: 64px !important; text-align: center; }
+label.lbl { display: block; font-size: 13px; color: var(--muted); margin-bottom: 3px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .md h1, .md h2, .md h3, .md h4 { margin: 14px 0 6px; line-height: 1.35; }
 .md h1 { font-size: 18px; } .md h2 { font-size: 16px; } .md h3, .md h4 { font-size: 15px; }
 .md p { margin: 6px 0; } .md ul, .md ol { margin: 6px 0; padding-left: 22px; }
@@ -96,129 +149,44 @@ details.adv summary { cursor: pointer; color: var(--muted); }
 .md table { border-collapse: collapse; margin: 8px 0; display: block; overflow-x: auto; }
 .md th, .md td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; }
 .md hr { border: 0; border-top: 1px solid var(--border); }
-.report { border-color: var(--accent); }
-table.hist { width: 100%; border-collapse: collapse; }
-table.hist th, table.hist td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
-table.hist tr.click { cursor: pointer; } table.hist tr.click:hover td { background: var(--code-bg); }
-.topic-cell { overflow-wrap: anywhere; }
-@media (max-width: 720px) { table.hist .hide-sm { display: none; } }
-.srow { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
-.srow:first-of-type { border-top: 0; }
-@media (max-width: 720px) { .srow { grid-template-columns: 1fr; } }
-.empty { color: var(--muted); text-align: center; padding: 24px; }
+.srow { padding: 14px 0; border-top: 1px solid var(--border); }
+.srow:first-child { border-top: 0; }
+.empty { color: var(--muted); text-align: center; padding: 24px 8px; font-size: 14px; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg);
-  padding: 8px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; max-width: 90vw; }
+  padding: 8px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; max-width: 90vw; }
 .toast.show { opacity: .95; }
 </style>
 </head>
 <body>
-<header>
-  <div class="bar">
-    <div class="brand">AI 议事厅</div>
-    <nav id="tabs">
-      <button data-view="new" class="active">新建辩论</button>
-      <button data-view="live">进行中</button>
-      <button data-view="history">历史</button>
-      <button data-view="settings">设置</button>
-    </nav>
-  </div>
-</header>
-
-<main>
-  <!-- ====================== 新建辩论 ====================== -->
-  <section id="view-new" class="view active">
-    <div class="panel stack">
-      <div>
-        <label class="field" for="topic">话题 <span class="hint">（必填）</span></label>
-        <textarea id="topic" rows="2" placeholder="例如：两款冰柜 A 和 B 选哪个？"></textarea>
-      </div>
-      <div>
-        <label class="field" for="background">背景材料 <span class="hint">（可选，会原样发给每个参会 AI）</span></label>
-        <textarea id="background" rows="4" placeholder="可粘贴价格对比表、现状描述等"></textarea>
-      </div>
+<div class="app" id="app">
+  <aside class="left" id="left">
+    <div class="left-top">
+      <div class="brand">AI 议事厅</div>
+      <button class="new-btn" id="btn-new">＋ 新辩论</button>
     </div>
+    <div class="hist-title">历史</div>
+    <div class="hist" id="hist"></div>
+    <div class="left-foot"><button class="nav-btn" id="btn-settings">⚙ 设置（Key 与模型）</button></div>
+  </aside>
 
-    <div class="panel">
-      <div class="row" style="margin-bottom:10px">
-        <h2 class="grow" style="margin:0">参会者 <span class="hint" id="pcount"></span></h2>
-        <button class="btn small" id="btn-free-lineup">一键勾选免费阵容</button>
-      </div>
-      <div class="plist" id="plist"></div>
-      <p class="hint" style="margin:8px 0 0">勾选 2~8 位。模型可从下拉列表选，也可直接输入；点“＋”可以让同一个 provider 再坐一席（例如换个角色）。</p>
+  <main class="mid">
+    <div class="mid-head">
+      <button class="btn icon only-narrow" id="btn-show-left" aria-label="打开历史">☰</button>
+      <div class="title" id="mid-title">新辩论</div>
+      <span class="hint" id="mid-status"></span>
+      <button class="btn icon only-narrow" id="btn-show-right" aria-label="打开侧栏">⚙ 参会者</button>
     </div>
+    <div class="mid-body" id="mid-body"></div>
+    <div class="composer-wrap" id="composer-wrap"></div>
+  </main>
 
-    <div class="panel stack">
-      <h2>轮次与综合</h2>
-      <div class="row">
-        <label class="toggle"><input type="checkbox" id="blind" checked> 盲写首轮（各方互相看不到）</label>
-      </div>
-      <div class="row">
-        <span>交叉辩论轮数</span>
-        <div class="stepper"><button type="button" id="rounds-minus">−</button><span id="rounds">2</span><button type="button" id="rounds-plus">＋</button></div>
-        <span class="hint">0~5 轮</span>
-      </div>
-      <div>
-        <label class="field" for="synth">综合者</label>
-        <select id="synth"></select>
-      </div>
-      <details class="adv">
-        <summary>高级参数</summary>
-        <div class="row" style="margin-top:10px">
-          <div class="grow"><label class="field" for="max_tokens">max_tokens <span class="hint">200~8000</span></label>
-            <input type="number" id="max_tokens" min="200" max="8000" step="100" value="1500"></div>
-          <div class="grow"><label class="field" for="temperature">temperature <span class="hint">0~2</span></label>
-            <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.7"></div>
-        </div>
-      </details>
-    </div>
-
-    <div class="panel stack">
-      <div id="cost-warn" class="warn" style="display:none">本次辩论将产生 API 费用（走你自己的账户）。</div>
-      <div id="start-err" class="err" style="display:none"></div>
-      <div class="row">
-        <button class="btn primary" id="btn-start" disabled>开始辩论</button>
-        <span class="hint" id="start-reason"></span>
-      </div>
-    </div>
-  </section>
-
-  <!-- ====================== 进行中 ====================== -->
-  <section id="view-live" class="view">
-    <div id="live-empty" class="panel empty">当前没有进行中的辩论。去“新建辩论”开始一场吧。</div>
-    <div id="live-wrap" style="display:none">
-      <div class="panel">
-        <div class="row">
-          <div class="grow"><h2 id="live-topic" style="margin:0;overflow-wrap:anywhere"></h2>
-            <div class="hint" id="live-status"></div></div>
-          <button class="btn danger" id="btn-cancel">取消辩论</button>
-          <button class="btn" id="btn-live-synth" style="display:none">生成综合报告</button>
-        </div>
-      </div>
-      <div id="live-rounds"></div>
-      <div id="live-synth"></div>
-    </div>
-  </section>
-
-  <!-- ====================== 历史 ====================== -->
-  <section id="view-history" class="view">
-    <div id="hist-list-wrap" class="panel">
-      <div class="row" style="margin-bottom:8px"><h2 class="grow" style="margin:0">历史辩论</h2><button class="btn small" id="btn-hist-refresh">刷新</button></div>
-      <div id="hist-list"></div>
-    </div>
-    <div id="hist-detail" style="display:none"></div>
-  </section>
-
-  <!-- ====================== 设置 ====================== -->
-  <section id="view-settings" class="view">
-    <div class="panel">
-      <h2>Provider 与 Key</h2>
-      <p class="hint" style="margin-top:0">Key 只保存在本机 <code>.env</code> 文件里，页面永远看不到 key 明文。本应用只会向你选择的 provider 发请求。</p>
-      <div id="settings-list"></div>
-    </div>
-  </section>
-</main>
+  <aside class="right" id="right">
+    <div class="tabs" id="right-tabs"></div>
+    <div class="right-body" id="right-body"></div>
+  </aside>
+</div>
+<div class="scrim" id="scrim"></div>
 <div class="toast" id="toast"></div>
-
 <script>
 "use strict";
 // ============================================================ 工具
@@ -314,422 +282,545 @@ function md(src) {
   return out;
 }
 
-// ============================================================ 视图切换
-function showView(name) {
-  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  if (name === "history") { loadHistory(); }
-  if (name === "settings") { loadProviders().then(renderSettings); }
-  if (name === "new") { loadProviders().then(renderParticipants); }
-  window.scrollTo(0, 0);
-}
-$("#tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showView(b.dataset.view); });
 
-// ============================================================ Providers
+// ============================================================ 状态
+const COLORS = ["#c2410c", "#2563eb", "#15803d", "#7c3aed", "#db2777", "#0891b2", "#a16207", "#475569"];
 let PROVIDERS = [];
+let HISTORY = [];
 const byId = (id) => PROVIDERS.find((p) => p.id === id);
+const keyOk = (p) => p && (!p.need_key || p.key_configured);
+const S = {
+  mode: "new",      // new | debate | settings
+  tab: "people",    // 右栏：people | report
+  cur: null,        // 当前打开的辩论
+  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7 },
+};
+const app = $("#app");
+
 async function loadProviders() {
   try { PROVIDERS = await api("GET", "/api/providers"); } catch (e) { toast(e.message); }
   return PROVIDERS;
 }
-const keyOk = (p) => !p.need_key || p.key_configured;
+function closeDrawers() { document.body.classList.remove("show-left", "show-right"); }
+$("#btn-show-left").onclick = () => document.body.classList.add("show-left");
+$("#btn-show-right").onclick = () => document.body.classList.add("show-right");
+$("#scrim").onclick = closeDrawers;
+function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 80; }
+function providerName(pid) { const p = byId(pid); return p ? p.name : pid; }
+function seatLabel(p) { return providerName(p.provider) + (p.id && p.id.includes("#") ? " #" + p.id.split("#")[1] : ""); }
+function renderUsage(u) { return u ? `输入 ${u.prompt_tokens} / 输出 ${u.completion_tokens} tokens` : ""; }
+function datalistFor(pid) {
+  const id = `dl-${pid}`;
+  let dl = document.getElementById(id);
+  if (!dl) { dl = h("datalist", { id }); document.body.append(dl); }
+  const p = byId(pid); dl.innerHTML = "";
+  ((p && p.models.length) ? p.models : [p ? p.default_model : ""]).forEach((m) => dl.append(h("option", { value: m })));
+  return id;
+}
+
+// ============================================================ 左栏：历史
+async function loadHistory() {
+  try { HISTORY = await api("GET", "/api/debates"); } catch (e) { toast(e.message); }
+  renderLeft();
+}
+function renderLeft() {
+  const box = $("#hist"); box.innerHTML = "";
+  if (!HISTORY.length) { box.append(h("div", { class: "empty" }, "还没有辩论记录")); }
+  HISTORY.forEach((it) => box.append(h("div", {
+    class: "hist-item" + (S.mode === "debate" && S.cur && S.cur.id === it.id ? " active" : ""), title: `${it.topic}\n${fmtTime(it.created_at)} · ${STATUS_TEXT[it.status] || it.status}`,
+    onclick: () => { closeDrawers(); openDebate(it.id); } },
+    h("span", { class: `dot ${it.status}` }), h("span", { class: "t" }, it.topic))));
+  $("#btn-settings").classList.toggle("active", S.mode === "settings");
+}
+$("#btn-new").onclick = () => { closeDrawers(); showNew(); };
+$("#btn-settings").onclick = () => { closeDrawers(); showSettings(); };
+
+function setRightVisible(on) { app.classList.toggle("no-right", !on); $("#btn-show-right").style.visibility = on ? "" : "hidden"; }
 
 // ============================================================ 新建辩论
-// seats：参会席位，同一个 provider 可以有多个席位
-let seats = null;
-let debateRounds = 2;
-
 function initSeats() {
   // auto=true 表示模型是系统给的默认值（没被手动改过），刷新模型列表后会跟着更新
-  seats = PROVIDERS.map((p) => ({ provider: p.id, model: p.default_model, role: "", on: false, auto: true }));
+  S.setup.seats = PROVIDERS.map((p) => ({ provider: p.id, model: p.default_model, role: "", on: false, auto: true }));
 }
-function renderParticipants() {
-  if (!seats) initSeats();
+function seatsSyncDefaults() {
+  (S.setup.seats || []).forEach((s) => { const p = byId(s.provider); if (p && s.auto !== false) s.model = p.default_model; });
+}
+const chosen = () => (S.setup.seats || []).filter((s) => s.on);
+
+async function showNew() {
+  closeEvents();
+  S.mode = "new"; S.cur = null; S.tab = "people";
+  await loadProviders();
+  if (!S.setup.seats) initSeats();
   seatsSyncDefaults();
-  const list = $("#plist"); list.innerHTML = "";
-  seats.forEach((s, idx) => {
-    const p = byId(s.provider); if (!p) return;
-    const dlId = `dl-${p.id}`;
-    if (!document.getElementById(dlId)) document.body.append(h("datalist", { id: dlId }));
-    const dl = document.getElementById(dlId); dl.innerHTML = "";
-    const models = p.models.length ? p.models : [p.default_model];
-    models.forEach((m) => dl.append(h("option", { value: m })));
-    const dup = seats.slice(0, idx).filter((x) => x.provider === s.provider).length;
-    let badge;
-    if (!p.need_key) badge = h("span", { class: "badge ok" }, p.key_configured ? "已配置 key" : "无需 key");
-    else if (p.key_configured) badge = h("span", { class: "badge ok" }, "已配置 key");
-    else badge = h("a", { href: "#", class: "badge fail", onclick: (e) => { e.preventDefault(); showView("settings"); } }, "未配置 key，去设置页配置");
-    const row = h("div", { class: "prow" + (s.on ? "" : " off") },
-      h("input", { type: "checkbox", checked: s.on, "aria-label": `选择 ${p.name}`, onchange: (e) => {
-        if (e.target.checked && !keyOk(p)) { e.target.checked = false; toast(`${p.name} 需要 key，请先到设置页配置`); return; }
-        s.on = e.target.checked; renderParticipants(); } }),
-      h("div", { class: "pname" }, p.name + (dup ? ` #${dup + 1}` : ""), badge),
-      h("input", { type: "text", class: "pmodel", list: dlId, value: s.model, placeholder: "模型名", "aria-label": "模型",
-        oninput: (e) => { s.model = e.target.value; s.auto = false; updateSynth(); validateForm(); }, onchange: () => updateSynth() }),
-      h("input", { type: "text", class: "prole", value: s.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色",
-        oninput: (e) => { s.role = e.target.value; } }),
-      h("div", { class: "pactions" },
-        h("button", { class: "btn small", title: "再加一个席位", onclick: () => { seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p), auto: s.auto }); renderParticipants(); } }, "＋"),
-        dup ? h("button", { class: "btn small", title: "移除这个席位", onclick: () => { seats.splice(idx, 1); renderParticipants(); } }, "－") : null)
-    );
-    list.append(row);
-  });
-  updateSynth(); validateForm();
+  setRightVisible(true);
+  $("#mid-title").textContent = "新辩论"; $("#mid-status").textContent = "";
+  $("#btn-show-right").textContent = "⚙ 参会者";
+  renderLeft();
+  const body = $("#mid-body"); body.innerHTML = "";
+  body.append(h("div", { class: "col hero" },
+    h("h1", {}, "今天想让 AI 们辩论什么？"),
+    h("div", { class: "hint" }, "在下面写下话题，在右侧挑选参会的 AI。辩完会给出标出共识与分歧的综合报告，之后还可以补充新内容接着辩。")));
+  renderNewComposer();
+  renderSetupPanel();
 }
-function chosen() { return seats ? seats.filter((s) => s.on) : []; }
-function updateSynth() {
-  const sel = $("#synth"); const prev = sel.value;
-  sel.innerHTML = "";
-  const c = chosen(); const seen = new Set();
-  c.forEach((s) => {
+function renderNewComposer() {
+  const st = S.setup;
+  const topic = h("textarea", { id: "topic", rows: 3, placeholder: "例如：两款冰柜 A 和 B 选哪个？", value: st.topic,
+    oninput: (e) => { st.topic = e.target.value; validateSetup(); },
+    onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) startDebate(); } });
+  const bg = h("textarea", { class: "box", rows: 4, placeholder: "背景材料（可选，会原样发给每个参会 AI）：价格对比表、现状描述等", value: st.background,
+    style: st.showBg ? "margin-top:6px" : "display:none;margin-top:6px", oninput: (e) => { st.background = e.target.value; } });
+  const wrap = $("#composer-wrap"); wrap.innerHTML = "";
+  wrap.append(h("div", { class: "composer" }, topic, bg,
+    h("div", { class: "composer-bar" },
+      h("button", { class: "btn small", onclick: () => { st.showBg = !st.showBg; bg.style.display = st.showBg ? "" : "none"; if (st.showBg) bg.focus(); } }, "＋ 背景材料"),
+      h("span", { class: "hint", id: "start-reason" }),
+      h("span", { class: "spacer" }),
+      h("button", { class: "btn primary", id: "btn-start", onclick: startDebate }, "开始辩论"))));
+  validateSetup();
+  topic.focus();
+}
+function renderSetupPanel() {
+  const st = S.setup;
+  $("#right-tabs").innerHTML = ""; $("#right-tabs").append(h("button", { class: "active" }, "参会者与设置"),
+    h("button", { class: "x only-narrow", onclick: closeDrawers }, "✕"));
+  const body = $("#right-body"); body.innerHTML = "";
+
+  const seatsBox = h("div", {});
+  st.seats.forEach((s, idx) => {
+    const p = byId(s.provider); if (!p) return;
+    const dup = st.seats.slice(0, idx).filter((x) => x.provider === s.provider).length;
+    let badge;
+    if (keyOk(p)) badge = h("span", { class: "badge ok" }, "已配置");
+    else badge = h("a", { href: "#", class: "badge fail", onclick: (e) => { e.preventDefault(); showSettings(); } }, "去配置 key");
+    seatsBox.append(h("div", { class: "seat" + (s.on ? "" : " off") },
+      h("div", { class: "seat-top" },
+        h("input", { type: "checkbox", checked: s.on, "aria-label": `选择 ${p.name}`, onchange: (e) => {
+          if (e.target.checked && !keyOk(p)) { e.target.checked = false; toast(`${p.name} 需要 key，请先到设置页配置`); return; }
+          s.on = e.target.checked; renderSetupPanel(); } }),
+        h("span", { class: "name" }, p.name + (dup ? ` #${dup + 1}` : ""), " ", p.free ? h("span", { class: "badge free" }, "免费") : null),
+        badge,
+        h("button", { class: "btn small icon", title: "同一家再加一个席位（例如换个角色）", onclick: () => { st.seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p), auto: s.auto }); renderSetupPanel(); } }, "＋"),
+        dup ? h("button", { class: "btn small icon", title: "移除这个席位", onclick: () => { st.seats.splice(idx, 1); renderSetupPanel(); } }, "－") : null),
+      h("div", { class: "seat-fields" },
+        h("input", { type: "text", list: datalistFor(p.id), value: s.model, placeholder: "模型名", "aria-label": "模型",
+          oninput: (e) => { s.model = e.target.value; s.auto = false; validateSetup(); }, onchange: () => renderSetupPanel() }),
+        h("input", { type: "text", value: s.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色", oninput: (e) => { s.role = e.target.value; } }))));
+  });
+
+  const synthSel = h("select", { onchange: (e) => { st.synth = e.target.value; } });
+  const seen = new Set();
+  chosen().forEach((s) => {
     const val = `${s.provider}|${s.model.trim() || byId(s.provider).default_model}`;
     if (seen.has(val)) return; seen.add(val);
-    sel.append(h("option", { value: val }, `${byId(s.provider).name} / ${val.split("|")[1]}`));
+    synthSel.append(h("option", { value: val }, `${providerName(s.provider)} / ${val.split("|")[1]}`));
   });
-  if (!c.length) sel.append(h("option", { value: "" }, "（先勾选参会者，默认=第一个参会者）"));
-  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  if (!seen.size) synthSel.append(h("option", { value: "" }, "（默认=第一个参会者）"));
+  if (seen.has(st.synth)) synthSel.value = st.synth; else st.synth = synthSel.value;
+
+  body.append(
+    h("div", { class: "sec" },
+      h("div", { class: "row", style: "margin-bottom:8px" }, h("h3", { class: "grow", style: "margin:0" }, `参会者（已选 ${chosen().length} 位，2~8 位）`),
+        h("button", { class: "btn small", onclick: applyFreeLineup }, "一键免费阵容")),
+      seatsBox),
+    h("div", { class: "sec" }, h("h3", {}, "轮次"),
+      h("label", { class: "row", style: "cursor:pointer" }, h("input", { type: "checkbox", checked: st.blind, onchange: (e) => { st.blind = e.target.checked; } }), "盲写首轮（各方互相看不到）"),
+      h("div", { class: "row", style: "margin-top:6px" }, "交叉辩论",
+        h("input", { type: "number", class: "num", min: 0, max: 5, value: st.rounds, oninput: (e) => { st.rounds = Math.max(0, Math.min(5, +e.target.value || 0)); } }), "轮",
+        h("span", { class: "hint" }, "辩完后还能接着辩，不限轮数"))),
+    h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
+    h("details", { class: "sec" }, h("summary", {}, "高级参数"),
+      h("div", { class: "row", style: "margin-top:8px" },
+        h("div", { class: "grow" }, h("label", { class: "lbl" }, "max_tokens（200~8000）"),
+          h("input", { type: "number", min: 200, max: 8000, step: 100, value: st.maxTokens, oninput: (e) => { st.maxTokens = +e.target.value; validateSetup(); } })),
+        h("div", { class: "grow" }, h("label", { class: "lbl" }, "temperature（0~2）"),
+          h("input", { type: "number", min: 0, max: 2, step: 0.1, value: st.temperature, oninput: (e) => { st.temperature = +e.target.value; validateSetup(); } })))),
+    h("div", { class: "warn", id: "cost-warn", style: "display:none" }, "本次辩论将产生 API 费用（走你自己的账户）。"));
+  validateSetup();
 }
-function validateForm() {
-  const c = chosen();
-  $("#pcount").textContent = `已选 ${c.length} 位`;
+function validateSetup() {
+  const st = S.setup, c = chosen();
   let reason = "";
-  if (!$("#topic").value.trim()) reason = "请填写话题";
-  else if (c.length < 2) reason = "至少勾选 2 位参会者";
+  if (!st.topic.trim()) reason = "先写下话题";
+  else if (c.length < 2) reason = "在右侧至少勾选 2 位参会者";
   else if (c.length > 8) reason = "最多 8 位参会者";
   else if (c.some((s) => !keyOk(byId(s.provider)))) reason = "有参会者的 key 未配置";
-  else {
-    const mt = +$("#max_tokens").value, t = +$("#temperature").value;
-    if (!(mt >= 200 && mt <= 8000)) reason = "max_tokens 需在 200~8000";
-    else if (!(t >= 0 && t <= 2)) reason = "temperature 需在 0~2";
-  }
-  $("#btn-start").disabled = !!reason;
-  $("#start-reason").textContent = reason;
+  else if (!(st.maxTokens >= 200 && st.maxTokens <= 8000)) reason = "max_tokens 需在 200~8000";
+  else if (!(st.temperature >= 0 && st.temperature <= 2)) reason = "temperature 需在 0~2";
+  const btn = $("#btn-start"); if (btn) btn.disabled = !!reason;
+  const r = $("#start-reason"); if (r) r.textContent = reason;
   const paid = c.some((s) => { const p = byId(s.provider); return !p.free || (p.id === "openrouter" && !s.model.trim().endsWith(":free")); });
-  $("#cost-warn").style.display = paid ? "block" : "none";
+  const w = $("#cost-warn"); if (w) w.style.display = paid ? "block" : "none";
   return !reason;
 }
 function applyFreeLineup() {
-  if (!seats) initSeats();
-  seats.forEach((s) => (s.on = false));
-  const picks = ["gemini", "groq", "openrouter", "pollinations"].filter((id) => byId(id) && keyOk(byId(id))).slice(0, 3);
-  if (!picks.length) {
-    toast("免费阵容需要至少一个免费 key（Gemini / Groq / OpenRouter / Pollinations），先去设置页配置");
-    renderParticipants(); return;
-  }
-  picks.forEach((id) => {
-    const s = seats.find((x) => x.provider === id);
-    s.on = true;
-    if (s.auto !== false) s.model = byId(id).default_model;
-  });
+  const st = S.setup;
+  st.seats.forEach((s) => (s.on = false));
+  const picks = ["gemini", "groq", "openrouter", "pollinations"].filter((id) => keyOk(byId(id))).slice(0, 3);
+  if (!picks.length) { toast("免费阵容需要至少一个免费 key（Gemini / Groq / OpenRouter / Pollinations），先去设置页配置"); renderSetupPanel(); return; }
+  picks.forEach((id) => { const s = st.seats.find((x) => x.provider === id); s.on = true; if (s.auto !== false) s.model = byId(id).default_model; });
   if (picks.length < 2) {
     // 只有一家免费 key：同一家再坐一席，换个角色，凑够两方
-    const first = seats.find((x) => x.provider === picks[0]);
+    const first = st.seats.find((x) => x.provider === picks[0]);
     first.role = first.role || "正方：支持派";
-    const i = seats.indexOf(first);
-    seats.splice(i + 1, 0, { provider: first.provider, model: first.model, role: "反方：质疑派", on: true, auto: first.auto });
-    toast(`只配置了 ${byId(picks[0]).name} 一家免费 key，已让它以正反两个角色参会`);
+    st.seats.splice(st.seats.indexOf(first) + 1, 0, { provider: first.provider, model: first.model, role: "反方：质疑派", on: true, auto: first.auto });
+    toast(`只配置了 ${providerName(picks[0])} 一家免费 key，已让它以正反两个角色参会`);
   }
-  renderParticipants();
+  renderSetupPanel();
 }
-$("#btn-free-lineup").onclick = applyFreeLineup;
-$("#topic").addEventListener("input", validateForm);
-$("#max_tokens").addEventListener("input", validateForm);
-$("#temperature").addEventListener("input", validateForm);
-function setRounds(n) { debateRounds = Math.max(0, Math.min(5, n)); $("#rounds").textContent = debateRounds; }
-$("#rounds-minus").onclick = () => setRounds(debateRounds - 1);
-$("#rounds-plus").onclick = () => setRounds(debateRounds + 1);
-
-$("#btn-start").onclick = async () => {
-  if (!validateForm()) return;
-  const [sp, sm] = ($("#synth").value || "").split("|");
+async function startDebate() {
+  if (!validateSetup()) return;
+  const st = S.setup;
+  const [sp, sm] = (st.synth || "").split("|");
   const body = {
-    topic: $("#topic").value.trim(),
-    background: $("#background").value,
+    topic: st.topic.trim(), background: st.background,
     participants: chosen().map((s) => ({ provider: s.provider, model: s.model.trim(), role: s.role.trim() })),
-    blind_round: $("#blind").checked,
-    debate_rounds: debateRounds,
+    blind_round: st.blind, debate_rounds: st.rounds,
     synthesis: sp ? { provider: sp, model: sm } : null,
-    max_tokens: +$("#max_tokens").value,
-    temperature: +$("#temperature").value,
+    max_tokens: st.maxTokens, temperature: st.temperature,
   };
-  const errBox = $("#start-err"); errBox.style.display = "none";
   $("#btn-start").disabled = true;
   try {
     const { debate_id } = await api("POST", "/api/debates", body);
-    startLive(debate_id);
-  } catch (e) {
-    errBox.textContent = e.message; errBox.style.display = "block";
-  } finally { validateForm(); }
-};
-
-// ============================================================ 进行中（SSE）
-let live = null; // { id, es, debate, cards: Map, done }
-
-function cardKey(r, pid) { return `${r}::${pid}`; }
-function participantLabel(m) { const p = byId(m.provider); return (p ? p.name : m.provider) + (m.participant && m.participant.includes("#") ? " #" + m.participant.split("#")[1] : ""); }
-
-function makeCard(m, status) {
-  const dot = h("span", { class: `dot ${status}` });
-  const st = h("span", { class: "card-meta" }, MSG_STATUS[status] || status);
-  const body = h("div", { class: "card-body plain" });
-  const usage = h("div", { class: "card-meta" });
-  const card = h("div", { class: "card" },
-    h("div", { class: "card-head" }, dot, h("strong", {}, participantLabel(m)), st),
-    h("div", { class: "card-meta", style: "margin-bottom:6px" }, `${m.model} · ${m.role || DEFAULT_ROLE}`),
-    body, usage);
-  return { card, dot, st, body, usage, text: "" };
-}
-function setCardStatus(c, status, extra) {
-  c.dot.className = `dot ${status}`;
-  c.st.textContent = (MSG_STATUS[status] || status) + (extra ? `：${extra}` : "");
-}
-function renderUsage(u) { return u ? `输入 ${u.prompt_tokens} / 输出 ${u.completion_tokens} tokens` : ""; }
-
-function startLive(id) {
-  if (live && live.es) live.es.close();
-  live = { id, es: null, debate: null, cards: new Map(), rounds: new Map(), synth: null, done: false };
-  $("#live-rounds").innerHTML = ""; $("#live-synth").innerHTML = "";
-  $("#live-empty").style.display = "none"; $("#live-wrap").style.display = "block";
-  $("#btn-cancel").style.display = ""; $("#btn-cancel").disabled = false;
-  $("#btn-live-synth").style.display = "none";
-  showView("live");
-  api("GET", `/api/debates/${id}`).then((d) => {
-    live.debate = d;
-    $("#live-topic").textContent = d.topic;
-    $("#live-status").textContent = STATUS_TEXT[d.status] || d.status;
-    prefillLive(d);
-    connectEvents(id);
-  }).catch((e) => toast(e.message));
-}
-// 从历史重新开启时，先把已有的轮次和报告画出来，之后的事件在此基础上更新
-function prefillLive(d) {
-  (d.rounds || []).forEach((rnd) => {
-    ensureRound(rnd.index, rnd.index === 0 ? (d.config.blind_round ? "第 0 轮：盲写" : "第 0 轮：公开首轮") : `第 ${rnd.index} 轮：交叉辩论`);
-    rnd.messages.forEach((m) => {
-      const c = live.cards.get(cardKey(rnd.index, m.participant)); if (!c) return;
-      if (m.status === "ok") { c.text = m.text; c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(m.text); c.usage.textContent = renderUsage(m.usage); setCardStatus(c, "ok"); }
-      else if (m.status === "failed") { setCardStatus(c, "failed"); c.body.innerHTML = ""; c.body.append(h("div", { class: "err" }, m.error || "失败")); }
-    });
-  });
-  const syn = d.synthesis;
-  if (syn && syn.status === "ok") {
-    const s = ensureSynth(syn.by); s.body.classList.remove("plain"); s.body.classList.add("md"); s.body.innerHTML = md(syn.text); s.dot.className = "dot ok"; s.st.textContent = "已完成（旧）";
-  }
-}
-function ensureRound(r, title) {
-  if (live.rounds.has(r)) return live.rounds.get(r);
-  const cards = h("div", { class: "cards" });
-  const box = h("div", { class: "round" }, h("div", { class: "round-title" }, title || `第 ${r} 轮`), cards);
-  $("#live-rounds").append(box);
-  const parts = live.debate.config.participants;
-  parts.forEach((p) => {
-    const c = makeCard({ participant: p.id, provider: p.provider, model: p.model, role: p.role }, "pending");
-    live.cards.set(cardKey(r, p.id), c); cards.append(c.card);
-  });
-  live.rounds.set(r, box);
-  return box;
-}
-function ensureSynth(by) {
-  if (live.synth) return live.synth;
-  const dot = h("span", { class: "dot running" });
-  const st = h("span", { class: "card-meta" }, "生成中");
-  const body = h("div", { class: "card-body plain", style: "max-height:none" });
-  const card = h("div", { class: "panel report" },
-    h("div", { class: "card-head" }, dot, h("h2", { style: "margin:0" }, "综合报告"), st),
-    h("div", { class: "card-meta", style: "margin-bottom:8px" }, `综合者：${by || ""}`), body);
-  $("#live-synth").innerHTML = ""; $("#live-synth").append(card);
-  live.synth = { card, dot, st, body, text: "" };
-  return live.synth;
-}
-function connectEvents(id) {
-  const es = new EventSource(`/api/debates/${id}/events`);
-  live.es = es;
-  const on = (name, fn) => es.addEventListener(name, (ev) => { if (!live || live.id !== id) return; let d = {}; try { d = JSON.parse(ev.data); } catch (_) {} fn(d); });
-  on("debate_started", () => { $("#live-status").textContent = "进行中"; });
-  on("round_started", (d) => ensureRound(d.round, d.title));
-  on("participant_started", (d) => { ensureRound(d.round); const c = live.cards.get(cardKey(d.round, d.participant)); if (c) { c.text = ""; c.body.textContent = ""; setCardStatus(c, "running"); } });
-  on("participant_retry", (d) => { const c = live.cards.get(cardKey(d.round, d.participant)); if (c) { c.text = ""; c.body.textContent = ""; setCardStatus(c, "running", d.note); } });
-  on("token", (d) => {
-    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
-    const nearBottom = c.body.scrollHeight - c.body.scrollTop - c.body.clientHeight < 40;
-    c.text += d.delta; c.body.textContent = c.text;
-    if (nearBottom) c.body.scrollTop = c.body.scrollHeight;
-  });
-  on("message_done", (d) => {
-    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
-    c.text = d.text; c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(d.text);
-    c.usage.textContent = renderUsage(d.usage); setCardStatus(c, "ok");
-  });
-  on("message_failed", (d) => {
-    const c = live.cards.get(cardKey(d.round, d.participant)); if (!c) return;
-    setCardStatus(c, "failed"); c.body.innerHTML = ""; c.body.append(h("div", { class: "err" }, d.error || "失败"));
-  });
-  on("round_done", () => {});
-  on("synthesis_started", (d) => { live.synth = null; ensureSynth(d.by); $("#live-status").textContent = "正在生成综合报告…"; });
-  on("synthesis_retry", (d) => { const s = ensureSynth(); s.text = ""; s.body.textContent = ""; s.st.textContent = `生成中：${d.note}`; });
-  on("synthesis_token", (d) => { const s = ensureSynth(); s.text += d.delta; s.body.textContent = s.text; });
-  on("synthesis_done", (d) => { const s = ensureSynth(d.by); s.body.classList.remove("plain"); s.body.classList.add("md"); s.body.innerHTML = md(d.text); s.dot.className = "dot ok"; s.st.textContent = "已完成"; });
-  on("synthesis_failed", (d) => { const s = ensureSynth(d.by); s.dot.className = "dot failed"; s.st.textContent = "失败"; s.body.innerHTML = ""; s.body.append(h("div", { class: "err" }, d.error)); });
-  const finish = (status) => {
-    es.close(); live.done = true;
-    $("#btn-cancel").style.display = "none";
-    $("#live-status").textContent = STATUS_TEXT[status] || status || "已结束";
-    const synthOk = live.synth && live.synth.dot.classList.contains("ok");
-    $("#btn-live-synth").style.display = synthOk ? "none" : "";
-    $("#btn-live-synth").textContent = "生成综合报告";
-    if (synthOk) { toast("辩论完成，已跳到综合报告"); setTimeout(() => { if (live && live.id === id) openDetail(id); }, 900); }
-  };
-  on("debate_done", (d) => {
-    if (d.archived) { es.close(); openDetail(id); return; }
-    finish(d.status);
-  });
-  on("debate_cancelled", () => { toast("辩论已取消，已完成的轮次已保留"); finish("cancelled"); });
-  es.onerror = () => { if (live && live.done) es.close(); /* 否则 EventSource 自动重连，服务端按 Last-Event-ID 续传 */ };
-}
-$("#btn-cancel").onclick = async () => {
-  if (!live) return;
-  $("#btn-cancel").disabled = true;
-  try { const r = await api("POST", `/api/debates/${live.id}/cancel`); toast(r.note || "已请求取消"); $("#live-status").textContent = "正在取消：当前轮完成后停止…"; }
-  catch (e) { toast(e.message); $("#btn-cancel").disabled = false; }
-};
-$("#btn-live-synth").onclick = () => live && runSynthesis(live.id);
-
-async function runSynthesis(id) {
-  try { await api("POST", `/api/debates/${id}/synthesize`); startLive(id); } catch (e) { toast(e.message); }
-}
-async function resumeDebate(id, body) {
-  try { await api("POST", `/api/debates/${id}/resume`, body); startLive(id); } catch (e) { toast(e.message); }
+    st.topic = ""; st.background = "";
+    await openDebate(debate_id);
+    loadHistory();
+  } catch (e) { toast(e.message); validateSetup(); }
 }
 
-// ============================================================ 历史
-async function loadHistory() {
-  $("#hist-detail").style.display = "none"; $("#hist-list-wrap").style.display = "block";
-  const box = $("#hist-list"); box.innerHTML = '<div class="empty">加载中…</div>';
-  let items = [];
-  try { items = await api("GET", "/api/debates"); } catch (e) { box.innerHTML = ""; box.append(h("div", { class: "err" }, e.message)); return; }
-  box.innerHTML = "";
-  if (!items.length) { box.innerHTML = '<div class="empty">还没有辩论记录</div>'; return; }
-  const tbody = h("tbody");
-  items.forEach((it) => tbody.append(h("tr", { class: "click", onclick: () => openDetail(it.id) },
-    h("td", { class: "topic-cell" }, it.topic),
-    h("td", { class: "hide-sm" }, fmtTime(it.created_at)),
-    h("td", { class: "hide-sm" }, `${it.participants} 位`),
-    h("td", {}, h("span", { class: "badge" + (it.status === "done" ? " ok" : it.status === "running" ? " free" : "") }, STATUS_TEXT[it.status] || it.status)))));
-  box.append(h("table", { class: "hist" }, h("thead", {}, h("tr", {}, h("th", {}, "话题"), h("th", { class: "hide-sm" }, "时间"), h("th", { class: "hide-sm" }, "参会者"), h("th", {}, "状态"))), tbody));
-}
-$("#btn-hist-refresh").onclick = loadHistory;
-
-async function openDetail(id) {
+// ============================================================ 打开一场辩论（对话视图）
+function closeEvents() { if (S.cur && S.cur.es) { S.cur.es.close(); S.cur.es = null; } }
+async function openDebate(id) {
+  closeEvents();
   let d;
   try { d = await api("GET", `/api/debates/${id}`); } catch (e) { toast(e.message); return; }
   if (!PROVIDERS.length) await loadProviders();
-  showViewOnly("history");
-  $("#hist-list-wrap").style.display = "none";
-  const box = $("#hist-detail"); box.innerHTML = ""; box.style.display = "block";
-  const cfg = d.config, u = d.usage || {};
-  const hasFailed = (d.rounds || []).some((r) => r.messages.some((m) => m.status !== "ok"));
-  const extraSel = h("select", { style: "width:auto", "aria-label": "追加轮数", title: "再追加几轮交叉辩论（会先重试失败的发言），完成后重新综合" },
-    [1, 2, 3].map((n) => h("option", { value: n }, `再辩 ${n} 轮`)));
-  const actions = h("div", { class: "row" },
-    h("button", { class: "btn", onclick: loadHistory }, "← 返回列表"),
-    d.active ? h("button", { class: "btn primary", onclick: () => startLive(id) }, "观看进行中") : null,
-    h("a", { class: "btn", href: `/api/debates/${id}/export.md`, download: "", style: "text-decoration:none" }, "导出 .md"),
-    !d.active ? h("button", { class: "btn", onclick: () => runSynthesis(id) }, d.synthesis && d.synthesis.status === "ok" ? "重新综合" : "生成综合报告") : null,
-    !d.active && hasFailed ? h("button", { class: "btn primary", onclick: () => resumeDebate(id, { retry_failed: true }) }, "重试失败的发言") : null,
-    !d.active ? h("span", { class: "row", style: "gap:6px" }, extraSel,
-      h("button", { class: "btn", onclick: () => resumeDebate(id, { retry_failed: hasFailed, extra_rounds: +extraSel.value }) }, "继续辩论")) : null,
-    !d.active ? h("button", { class: "btn danger", onclick: async () => {
-      if (!confirm("确定删除这场辩论的存档吗？此操作不可恢复。")) return;
-      try { await api("DELETE", `/api/debates/${id}`); toast("已删除"); loadHistory(); } catch (e) { toast(e.message); }
-    } }, "删除") : null);
-  box.append(h("div", { class: "panel stack" },
-    actions,
-    h("h2", { style: "margin:0;overflow-wrap:anywhere" }, d.topic),
-    h("div", { class: "hint" },
-      `${fmtTime(d.created_at)} · ${STATUS_TEXT[d.status] || d.status} · ${cfg.participants.length} 位参会者 · ${cfg.blind_round ? "盲写首轮" : "公开首轮"} + ${cfg.debate_rounds} 轮交叉辩论 · 综合者 ${cfg.synthesis.provider}/${cfg.synthesis.model}`),
-    h("div", { class: "hint" }, `用量：${u.calls || 0} 次调用，输入 ${u.prompt_tokens || 0} tokens，输出 ${u.completion_tokens || 0} tokens`),
-    d.background && d.background.trim() ? h("details", {}, h("summary", {}, "背景材料"), h("div", { class: "card-body plain", style: "max-height:none;margin-top:6px" }, d.background)) : null));
-
-  const syn = d.synthesis;
-  const synBox = h("div", { class: "panel report" }, h("h2", {}, "综合报告"));
-  if (syn && syn.status === "ok") {
-    synBox.append(h("div", { class: "card-meta", style: "margin-bottom:8px" }, `综合者：${syn.by}${syn.usage ? " · " + renderUsage(syn.usage) : ""}`), h("div", { class: "md", html: md(syn.text) }));
-  } else if (syn && syn.status === "failed") synBox.append(h("div", { class: "err" }, `综合失败：${syn.error || ""}`));
-  else synBox.append(h("div", { class: "hint" }, "尚未生成综合报告。"));
-  box.append(synBox);
-
-  (d.rounds || []).forEach((rnd) => {
-    const cards = h("div", { class: "cards" });
-    rnd.messages.forEach((m) => {
-      const c = makeCard(m, m.status);
-      if (m.status === "ok") { c.body.classList.remove("plain"); c.body.classList.add("md"); c.body.innerHTML = md(m.text); }
-      else if (m.status === "failed") c.body.append(h("div", { class: "err" }, m.error || "失败"));
-      c.usage.textContent = renderUsage(m.usage);
-      cards.append(c.card);
-    });
-    const title = rnd.index === 0 ? (cfg.blind_round ? "第 0 轮：盲写" : "第 0 轮：公开首轮") : `第 ${rnd.index} 轮：交叉辩论`;
-    box.append(h("details", { class: "panel", open: false }, h("summary", { style: "cursor:pointer;font-weight:700" }, title), h("div", { style: "margin-top:10px" }, cards)));
-  });
+  const keepTab = S.cur && S.cur.id === id ? S.tab : null;
+  S.mode = "debate";
+  S.cur = { id, d, es: null, synthLive: null, reportIdx: null, edits: {}, synthEdit: null, followup: "", extra: 1 };
+  S.tab = keepTab || (reportsOf(d).length || d.active ? "report" : "people");
+  setRightVisible(true);
+  $("#btn-show-right").textContent = "📄 报告";
+  renderAll();
+  const mb = $("#mid-body"); mb.scrollTop = mb.scrollHeight;
+  if (d.active) connectEvents(id);
 }
-function showViewOnly(name) {
-  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${name}`));
-  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
-  window.scrollTo(0, 0);
+function reportsOf(d) {
+  if (d.syntheses && d.syntheses.length) return d.syntheses;
+  return d.synthesis && d.synthesis.status === "ok" ? [d.synthesis] : [];
+}
+function colorOf(pid) {
+  const i = S.cur.d.config.participants.findIndex((p) => p.id === pid);
+  return COLORS[(i < 0 ? 0 : i) % COLORS.length];
+}
+function inputBefore(d, idx) { const it = (d.inputs || []).find((x) => x.before_round === idx); return it ? it.text : ""; }
+function roundTitle(d, idx) { return idx === 0 ? (d.config.blind_round ? "第 0 轮 · 盲写" : "第 0 轮 · 公开首轮") : `第 ${idx} 轮 · 交叉辩论`; }
+function renderAll() { renderLeft(); renderMidHead(); renderMidBody(); renderComposer(); renderRight(); }
+function renderMidHead() {
+  const d = S.cur.d;
+  $("#mid-title").textContent = d.topic;
+  $("#mid-status").textContent = d.active ? "进行中…" : (STATUS_TEXT[d.status] || d.status);
+}
+function msgEl(m, r) {
+  const p = S.cur.d.config.participants.find((x) => x.id === m.participant) || m;
+  const body = h("div", { class: "msg-body", id: `mb-${r}-${m.participant}` });
+  if (m.status === "ok") { body.classList.add("md"); body.innerHTML = md(m.text); }
+  else if (m.status === "failed") body.append(h("div", { class: "err" }, m.error || "失败"));
+  else if (m.status === "running") { body.classList.add("plain"); body.textContent = m.text || ""; if (!m.text) body.append(h("span", { class: "hint" }, m.note || "思考中…")); }
+  else body.append(h("span", { class: "hint" }, "等待发言"));
+  const st = m.status === "running" && m.note ? m.note : (MSG_STATUS[m.status] || m.status);
+  return h("div", { class: "msg", id: `m-${r}-${m.participant}` },
+    h("div", { class: "avatar", style: `background:${colorOf(m.participant)}` }, providerName(m.provider).slice(0, 1)),
+    h("div", { class: "msg-main" },
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, seatLabel({ provider: m.provider, id: m.participant })),
+        h("span", { class: "meta" }, `${m.model} · ${m.role || p.role || DEFAULT_ROLE}`),
+        h("span", { class: `dot ${m.status}` }), h("span", { class: "meta" }, st)),
+      body,
+      m.usage ? h("div", { class: "msg-foot" }, renderUsage(m.usage)) : null));
+}
+function renderMidBody() {
+  const d = S.cur.d, box = $("#mid-body");
+  const stick = nearBottom(box);
+  box.innerHTML = "";
+  const col = h("div", { class: "col" });
+  col.append(h("div", { class: "bubble-user" }, h("div", { class: "lbl" }, "话题"), d.topic,
+    d.background && d.background.trim() ? h("details", { style: "margin-top:6px" }, h("summary", {}, "背景材料"), d.background) : null));
+  const reps = reportsOf(d);
+  d.rounds.forEach((rnd) => {
+    const extra = inputBefore(d, rnd.index);
+    if (extra) col.append(h("div", { class: "bubble-user" }, h("div", { class: "lbl" }, "你的补充"), extra));
+    col.append(h("div", { class: "round-sep" }, roundTitle(d, rnd.index)));
+    rnd.messages.forEach((m) => col.append(msgEl(m, rnd.index)));
+    reps.forEach((rep, k) => {
+      const after = rep.after_round ?? d.rounds.length - 1;
+      if (after === rnd.index) col.append(h("div", { class: "report-chip", onclick: () => showReport(k) },
+        h("span", {}, "📄"), h("span", { class: "t" }, `综合报告${reps.length > 1 ? " #" + (k + 1) : ""}`),
+        h("span", { class: "hint" }, `由 ${rep.by}`), h("span", { class: "btn small" }, "查看")));
+    });
+  });
+  const live = S.cur.synthLive;
+  if (live && live.status === "running") col.append(h("div", { class: "report-chip", onclick: () => showReport(null) },
+    h("span", { class: "dot running" }), h("span", { class: "t" }, "正在写综合报告…"), h("span", { class: "hint" }, live.note || `由 ${live.by}`)));
+  else if (!d.active && d.synthesis && d.synthesis.status === "failed")
+    col.append(h("div", { class: "err", style: "margin:16px 0" }, `综合报告生成失败：${d.synthesis.error || ""}\n可以在右侧“参会者”里换一个综合者，然后点“重新综合”。`));
+  if (!d.active && !d.rounds.length) col.append(h("div", { class: "empty" }, "还没有发言记录"));
+  box.append(col);
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+function hasFailed(d) { return d.rounds.some((r) => r.messages.some((m) => m.status !== "ok")); }
+function renderComposer() {
+  const wrap = $("#composer-wrap"); wrap.innerHTML = "";
+  const cur = S.cur, d = cur.d;
+  if (d.active) {
+    wrap.append(h("div", { class: "composer" }, h("div", { class: "composer-bar" },
+      h("span", { class: "dot running" }), h("span", { class: "hint grow" }, "辩论进行中，发言会实时出现在上面…"),
+      h("button", { class: "btn danger", id: "btn-cancel", onclick: cancelDebate }, "取消"))));
+    return;
+  }
+  const ta = h("textarea", { rows: 2, placeholder: "补充新的内容或问题（可选），然后让它们接着辩…", value: cur.followup,
+    oninput: (e) => { cur.followup = e.target.value; },
+    onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) continueDebate(); } });
+  const edits = Object.keys(cur.edits).length + (cur.synthEdit ? 1 : 0);
+  wrap.append(h("div", { class: "composer" }, ta,
+    h("div", { class: "composer-bar" },
+      h("span", {}, "再辩"),
+      h("input", { type: "number", class: "num", min: 1, max: 10, value: cur.extra, "aria-label": "再辩轮数",
+        oninput: (e) => { cur.extra = Math.max(1, Math.min(10, +e.target.value || 1)); } }),
+      h("span", {}, "轮"),
+      edits ? h("span", { class: "badge free" }, `已改 ${edits} 处设置`) : null,
+      h("span", { class: "spacer" }),
+      hasFailed(d) ? h("button", { class: "btn", title: "只重跑失败的发言，然后重新综合", onclick: () => resume({ retry_failed: true }) }, "重试失败的发言") : null,
+      h("button", { class: "btn primary", onclick: continueDebate }, "继续辩论"))));
+}
+function editsPayload() {
+  const cur = S.cur, body = {};
+  const ps = Object.entries(cur.edits).map(([id, e]) => ({ id, ...e }));
+  if (ps.length) body.participants = ps;
+  if (cur.synthEdit) { const [provider, model] = cur.synthEdit.split("|"); body.synthesis = { provider, model }; }
+  return body;
+}
+function continueDebate() {
+  const cur = S.cur;
+  resume({ retry_failed: hasFailed(cur.d), extra_rounds: cur.extra, user_input: cur.followup.trim() });
+}
+async function resume(extraBody) {
+  const cur = S.cur;
+  try {
+    await api("POST", `/api/debates/${cur.id}/resume`, { ...editsPayload(), ...extraBody });
+    cur.followup = ""; cur.edits = {}; cur.synthEdit = null; cur.reportIdx = null; S.tab = "report";
+    await refreshCurrent(true);
+    loadHistory();
+  } catch (e) { toast(e.message); }
+}
+async function resynthesize() {
+  const cur = S.cur;
+  try {
+    // 综合者改过的话先保存（resume 不追加轮次时只会重试失败/重新综合，这里用 synthesize 接口更直接）
+    if (cur.synthEdit || Object.keys(cur.edits).length) { await resume({}); return; }
+    await api("POST", `/api/debates/${cur.id}/synthesize`);
+    await refreshCurrent(true);
+  } catch (e) { toast(e.message); }
+}
+async function cancelDebate() {
+  const b = $("#btn-cancel"); if (b) b.disabled = true;
+  try { const r = await api("POST", `/api/debates/${S.cur.id}/cancel`); toast(r.note || "已请求取消"); $("#mid-status").textContent = "正在取消：当前轮完成后停止…"; }
+  catch (e) { toast(e.message); if (b) b.disabled = false; }
+}
+async function refreshCurrent(connect) {
+  const cur = S.cur; if (!cur) return;
+  try { cur.d = await api("GET", `/api/debates/${cur.id}`); } catch (e) { toast(e.message); return; }
+  cur.synthLive = null;
+  renderAll();
+  const mb0 = $("#mid-body"); mb0.scrollTop = mb0.scrollHeight;
+  if (connect && cur.d.active) { const mb = $("#mid-body"); mb.scrollTop = mb.scrollHeight; connectEvents(cur.id); }
+}
+
+// ============================================================ 右栏：报告 / 参会者
+function showReport(k) { S.tab = "report"; S.cur.reportIdx = k; renderRight(); document.body.classList.add("show-right"); }
+function renderRight() {
+  if (S.mode !== "debate") return;
+  const tabs = $("#right-tabs"); tabs.innerHTML = "";
+  [["report", "综合报告"], ["people", "参会者与设置"]].forEach(([k, label]) =>
+    tabs.append(h("button", { class: S.tab === k ? "active" : "", onclick: () => { S.tab = k; renderRight(); } }, label)));
+  tabs.append(h("button", { class: "x only-narrow", onclick: closeDrawers }, "✕"));
+  const body = $("#right-body"); body.innerHTML = "";
+  if (S.tab === "report") renderReportTab(body); else renderPeopleTab(body);
+}
+function renderReportTab(body) {
+  const cur = S.cur, d = cur.d, reps = reportsOf(d), live = cur.synthLive;
+  if (live && (cur.reportIdx === null || !reps.length)) {
+    body.append(h("div", { class: "row", style: "margin-bottom:8px" }, h("span", { class: `dot ${live.status === "failed" ? "failed" : "running"}` }),
+      h("strong", {}, "正在综合"), h("span", { class: "hint" }, live.note || `由 ${live.by}`)));
+    if (live.status === "failed") body.append(h("div", { class: "err" }, live.error || "失败"));
+    body.append(h("div", { class: "msg-body plain", id: "live-report" }, live.text || ""));
+    return;
+  }
+  if (!reps.length) {
+    body.append(h("div", { class: "empty" }, d.active ? "辩论结束后会在这里生成综合报告。" : "还没有综合报告。"));
+    if (!d.active) body.append(h("div", { class: "row", style: "justify-content:center" }, h("button", { class: "btn", onclick: resynthesize }, "生成综合报告")));
+    return;
+  }
+  const k = cur.reportIdx === null || cur.reportIdx >= reps.length ? reps.length - 1 : cur.reportIdx;
+  const rep = reps[k];
+  const sel = reps.length > 1 ? h("select", { style: "width:auto", onchange: (e) => { cur.reportIdx = +e.target.value; renderRight(); } },
+    reps.map((r, i) => h("option", { value: i, selected: i === k }, `第 ${i + 1} 份 · 第 ${r.after_round ?? "?"} 轮后`))) : null;
+  body.append(h("div", {},
+    h("div", { class: "row", style: "margin-bottom:6px" }, sel, h("span", { class: "hint grow" }, `由 ${rep.by}${rep.usage ? " · " + renderUsage(rep.usage) : ""}`)),
+    rep.fallback_from ? h("div", { class: "hint", style: "margin-bottom:6px" }, `原定综合者失败，已自动换人：${rep.fallback_from.join("；")}`) : null,
+    h("div", { class: "md" , html: md(rep.text) }),
+    h("div", { class: "row", style: "margin-top:14px" },
+      h("a", { class: "btn small", href: `/api/debates/${cur.id}/export.md`, download: "" }, "导出 .md"),
+      !d.active ? h("button", { class: "btn small", onclick: resynthesize }, "重新综合") : null)));
+}
+function renderPeopleTab(body) {
+  const cur = S.cur, d = cur.d, cfg = d.config, u = d.usage || {};
+  const list = h("div", {});
+  cfg.participants.forEach((p) => {
+    const e = cur.edits[p.id] || {};
+    const set = (field, val) => {
+      const orig = p[field] || "";
+      const ed = cur.edits[p.id] = { ...(cur.edits[p.id] || {}) };
+      if (val.trim() === orig) delete ed[field]; else ed[field] = val;
+      if (!Object.keys(ed).length) delete cur.edits[p.id];
+      renderComposer();
+    };
+    list.append(h("div", { class: "seat" },
+      h("div", { class: "seat-top" }, h("span", { class: "avatar", style: `background:${colorOf(p.id)};width:22px;height:22px;font-size:11px` }, providerName(p.provider).slice(0, 1)),
+        h("span", { class: "name" }, seatLabel(p)), keyOk(byId(p.provider)) ? null : h("span", { class: "badge fail" }, "key 未配置")),
+      h("div", { class: "seat-fields" },
+        h("input", { type: "text", list: datalistFor(p.provider), value: e.model ?? p.model, placeholder: "模型名", "aria-label": "模型", disabled: d.active,
+          oninput: (ev) => set("model", ev.target.value) }),
+        h("input", { type: "text", value: e.role ?? p.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色", disabled: d.active,
+          oninput: (ev) => set("role", ev.target.value) }))));
+  });
+  const synthSel = h("select", { disabled: d.active, onchange: (ev) => {
+    const orig = `${cfg.synthesis.provider}|${cfg.synthesis.model}`;
+    cur.synthEdit = ev.target.value === orig ? null : ev.target.value; renderComposer(); } });
+  const opts = [`${cfg.synthesis.provider}|${cfg.synthesis.model}`];
+  cfg.participants.forEach((p) => { const e = cur.edits[p.id] || {}; const v = `${p.provider}|${e.model ?? p.model}`; if (!opts.includes(v)) opts.push(v); });
+  opts.forEach((v) => synthSel.append(h("option", { value: v }, `${providerName(v.split("|")[0])} / ${v.split("|")[1]}`)));
+  synthSel.value = cur.synthEdit || opts[0];
+  body.append(
+    h("div", { class: "sec" }, h("h3", {}, "参会者"), list,
+      h("div", { class: "hint" }, d.active ? "辩论进行中，结束后可以改模型和角色。" : "改动在下次“继续辩论”、“重试失败的发言”或“重新综合”时生效。")),
+    h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
+    h("div", { class: "sec" }, h("h3", {}, "这场辩论"),
+      h("div", { class: "hint" }, `${fmtTime(d.created_at)} · ${STATUS_TEXT[d.status] || d.status}`),
+      h("div", { class: "hint" }, `${cfg.blind_round ? "盲写首轮" : "公开首轮"} · 已辩 ${Math.max(0, d.rounds.length - 1)} 轮交叉辩论 · max_tokens ${cfg.max_tokens} · temperature ${cfg.temperature}`),
+      h("div", { class: "hint" }, `用量：${u.calls || 0} 次调用，输入 ${u.prompt_tokens || 0} tokens，输出 ${u.completion_tokens || 0} tokens`),
+      h("div", { class: "row", style: "margin-top:10px" },
+        h("a", { class: "btn small", href: `/api/debates/${cur.id}/export.md`, download: "" }, "导出 .md"),
+        !d.active ? h("button", { class: "btn small danger", onclick: deleteDebate }, "删除") : null)));
+}
+async function deleteDebate() {
+  if (!confirm("确定删除这场辩论的存档吗？此操作不可恢复。")) return;
+  try { await api("DELETE", `/api/debates/${S.cur.id}`); toast("已删除"); await loadHistory(); showNew(); } catch (e) { toast(e.message); }
+}
+
+// ============================================================ 实时事件（SSE）
+function findMsg(r, pid) {
+  const rnd = S.cur.d.rounds.find((x) => x.index === r);
+  return rnd ? rnd.messages.find((m) => m.participant === pid) : null;
+}
+function redrawMsg(r, m) {
+  const el = document.getElementById(`m-${r}-${m.participant}`);
+  const box = $("#mid-body"), stick = nearBottom(box);
+  if (el) el.replaceWith(msgEl(m, r)); else renderMidBody();
+  if (stick) box.scrollTop = box.scrollHeight;
+}
+function connectEvents(id) {
+  const es = new EventSource(`/api/debates/${id}/events`);
+  S.cur.es = es;
+  const on = (name, fn) => es.addEventListener(name, (ev) => {
+    if (!S.cur || S.cur.id !== id || S.mode !== "debate") return;
+    let data = {}; try { data = JSON.parse(ev.data); } catch (_) { /* 忽略 */ }
+    fn(data, S.cur.d);
+  });
+  on("round_started", (x, d) => {
+    if (!d.rounds.find((r) => r.index === x.round)) {
+      d.rounds.push({ index: x.round, messages: d.config.participants.map((p) => ({ participant: p.id, provider: p.provider, model: p.model, role: p.role, text: "", status: "pending" })) });
+      renderMidBody();
+    }
+  });
+  on("participant_started", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "running", text: "", note: null, usage: null }); redrawMsg(x.round, m); } });
+  on("participant_retry", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "running", text: "", note: x.note }); redrawMsg(x.round, m); } });
+  on("token", (x) => {
+    const m = findMsg(x.round, x.participant); if (!m) return;
+    const first = !m.text; m.text = (m.text || "") + x.delta;
+    const el = document.getElementById(`mb-${x.round}-${x.participant}`);
+    if (!el || first) { redrawMsg(x.round, m); return; }
+    const box = $("#mid-body"), stick = nearBottom(box);
+    el.textContent = m.text;
+    if (stick) box.scrollTop = box.scrollHeight;
+  });
+  on("message_done", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "ok", text: x.text, usage: x.usage, note: null }); redrawMsg(x.round, m); } });
+  on("message_failed", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "failed", error: x.error, note: null }); redrawMsg(x.round, m); } });
+  on("synthesis_started", (x) => { S.cur.synthLive = { by: x.by, text: "", status: "running" }; S.cur.reportIdx = null; S.tab = "report"; renderMidBody(); renderRight(); });
+  on("synthesis_retry", (x) => { const l = S.cur.synthLive; if (!l) return; l.text = ""; l.note = x.note; if (x.by) l.by = x.by; renderMidBody(); renderRight(); });
+  on("synthesis_token", (x) => {
+    const l = S.cur.synthLive; if (!l) return; l.text += x.delta;
+    const el = $("#live-report"); if (el) el.textContent = l.text;
+  });
+  on("synthesis_failed", (x) => { const l = S.cur.synthLive; if (l) { l.status = "failed"; l.error = x.error; renderRight(); } });
+  const finish = (msg) => { es.close(); if (S.cur) { S.cur.es = null; S.cur.reportIdx = null; } toast(msg); refreshCurrent(false); loadHistory(); };
+  on("debate_done", (x) => finish(x.archived ? "这场辩论已结束" : `辩论${STATUS_TEXT[x.status] || "结束"}`));
+  on("debate_cancelled", () => finish("辩论已取消，已完成的轮次已保留"));
+  es.onerror = () => { /* 断线时 EventSource 自动重连，服务端按 Last-Event-ID 续传 */ };
 }
 
 // ============================================================ 设置
+async function showSettings() {
+  closeEvents();
+  S.mode = "settings"; S.cur = null;
+  setRightVisible(false);
+  $("#mid-title").textContent = "设置：Provider 与 Key"; $("#mid-status").textContent = "";
+  $("#composer-wrap").innerHTML = "";
+  renderLeft();
+  await loadProviders();
+  renderSettings();
+}
 function renderSettings() {
-  const box = $("#settings-list"); box.innerHTML = "";
+  const box = $("#mid-body"); box.innerHTML = "";
+  const col = h("div", { class: "col" });
+  col.append(h("p", { class: "hint", style: "margin-top:0" }, "Key 只保存在本机 .env 文件里，页面永远看不到 key 明文。本应用只会向你选择的 provider 发请求。保存 key 时会自动获取模型列表，并挑一个当前可用的模型作为默认值。"));
   PROVIDERS.forEach((p) => {
-    const keyInput = h("input", { type: "password", placeholder: p.key_configured ? "已配置（输入新 key 可替换）" : (p.need_key ? "粘贴 API key" : "可选：粘贴 key 提高额度"), autocomplete: "off", spellcheck: false });
-    const status = p.key_configured ? h("span", { class: "badge ok" }, "已配置")
-      : p.need_key ? h("span", { class: "badge fail" }, "未配置") : h("span", { class: "badge" }, "无需 key");
-    const modelsInfo = h("span", { class: "hint" }, p.models.length ? `已缓存 ${p.models.length} 个模型（${fmtTime(p.models_updated_at)}）` : "尚未刷新模型列表，使用默认模型 " + p.default_model);
+    const keyInput = h("input", { type: "password", placeholder: p.key_configured ? "已配置（输入新 key 可替换）" : "粘贴 API key", autocomplete: "off", spellcheck: false });
+    const status = p.key_configured ? h("span", { class: "badge ok" }, "已配置") : p.need_key ? h("span", { class: "badge fail" }, "未配置") : h("span", { class: "badge" }, "无需 key");
+    const modelsInfo = h("span", { class: "hint" }, p.models.length ? `已缓存 ${p.models.length} 个模型（${fmtTime(p.models_updated_at)}），默认 ${p.default_model}` : `尚未获取模型列表，默认 ${p.default_model}`);
     const refreshBtn = h("button", { class: "btn small", disabled: p.need_key && !p.key_configured, onclick: async () => {
       refreshBtn.disabled = true; refreshBtn.textContent = "刷新中…";
       try { const r = await api("POST", `/api/providers/${p.id}/models/refresh`); toast(`${p.name}：获取到 ${r.models.length} 个模型`); await loadProviders(); seatsSyncDefaults(); renderSettings(); }
       catch (e) { toast(e.message); refreshBtn.disabled = false; refreshBtn.textContent = "刷新模型列表"; }
     } }, "刷新模型列表");
-    box.append(h("div", { class: "srow" },
-      h("div", {}, h("div", { style: "font-weight:700" }, p.name, " ", p.free ? h("span", { class: "badge free" }, "免费") : h("span", { class: "badge" }, "付费")),
-        h("div", { style: "margin-top:4px" }, status)),
-      h("div", { class: "stack" },
-        h("div", { class: "hint" }, p.free_tier_desc, " · ", h("a", { href: p.key_url, target: "_blank", rel: "noopener noreferrer" }, "获取 key")),
-        h("div", { class: "row" }, h("div", { class: "grow" }, keyInput),
-          h("button", { class: "btn small primary", onclick: async () => {
-            const k = keyInput.value.trim(); if (!k) { toast("请先粘贴 key"); return; }
-            try {
-              const r = await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = "";
-              toast(r.refresh_error ? `${p.name} key 已保存，但获取模型列表失败：${r.refresh_error}`
-                : `${p.name} key 已保存，获取到 ${r.models} 个模型，默认使用 ${r.default_model}`); await loadProviders(); renderSettings(); }
-            catch (e) { toast(e.message); }
-          } }, "保存"),
-          p.key_configured ? h("button", { class: "btn small danger", onclick: async () => {
-            if (!confirm(`删除 ${p.name} 的 key？`)) return;
-            try { await api("DELETE", `/api/providers/${p.id}/key`); toast("已删除"); await loadProviders(); renderSettings(); } catch (e) { toast(e.message); }
-          } }, "删除") : null),
-        h("div", { class: "row" }, refreshBtn, modelsInfo))));
+    col.append(h("div", { class: "srow" },
+      h("div", { class: "row" }, h("strong", {}, p.name), p.free ? h("span", { class: "badge free" }, "免费") : h("span", { class: "badge" }, "付费"), status),
+      h("div", { class: "hint", style: "margin:4px 0 8px" }, p.free_tier_desc, " · ", h("a", { href: p.key_url, target: "_blank", rel: "noopener noreferrer" }, "获取 key")),
+      h("div", { class: "row" }, h("div", { class: "grow" }, keyInput),
+        h("button", { class: "btn small primary", onclick: async () => {
+          const k = keyInput.value.trim(); if (!k) { toast("请先粘贴 key"); return; }
+          try {
+            const r = await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = "";
+            toast(r.refresh_error ? `${p.name} key 已保存，但获取模型列表失败：${r.refresh_error}` : `${p.name} key 已保存，获取到 ${r.models} 个模型，默认使用 ${r.default_model}`);
+            await loadProviders(); seatsSyncDefaults(); renderSettings();
+          } catch (e) { toast(e.message); }
+        } }, "保存"),
+        p.key_configured ? h("button", { class: "btn small danger", onclick: async () => {
+          if (!confirm(`删除 ${p.name} 的 key？`)) return;
+          try { await api("DELETE", `/api/providers/${p.id}/key`); toast("已删除"); await loadProviders(); renderSettings(); } catch (e) { toast(e.message); }
+        } }, "删除") : null),
+      h("div", { class: "row", style: "margin-top:8px" }, refreshBtn, modelsInfo)));
   });
-  box.append(h("div", { class: "srow" }, h("div", { style: "font-weight:700" }, "免费档默认阵容"),
-    h("div", { class: "row" }, h("span", { class: "hint grow" }, "Gemini + Groq + OpenRouter（:free 模型），零成本开箱即用。"),
-      h("button", { class: "btn small", onclick: () => { showView("new"); setTimeout(applyFreeLineup, 50); } }, "一键勾选并去新建"))));
-}
-// 刷新模型列表后：还在用旧默认模型的席位跟着换成新的默认模型（主要是 OpenRouter 的 :free 模型）
-function seatsSyncDefaults() {
-  if (!seats) return;
-  seats.forEach((s) => { const p = byId(s.provider); if (p && s.auto !== false) s.model = p.default_model; });
+  box.append(col);
 }
 
 // ============================================================ 启动
 (async function boot() {
   await loadProviders();
-  renderParticipants();
-  // 若有进行中的辩论，“进行中”页可直接观看
-  try {
-    const items = await api("GET", "/api/debates");
-    const running = items.find((x) => x.status === "running");
-    if (running) { const d = await api("GET", `/api/debates/${running.id}`); if (d.active) { startLive(running.id); showView("new"); toast("有一场辩论正在进行，可在“进行中”查看"); } }
-  } catch (_) { /* 忽略 */ }
+  await loadHistory();
+  const running = HISTORY.find((x) => x.status === "running");
+  if (running) { await openDebate(running.id); return; }
+  showNew();
 })();
 </script>
 </body>
