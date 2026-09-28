@@ -141,6 +141,13 @@ input:focus, textarea.box:focus, select:focus { outline: 2px solid var(--accent)
 .badge { display: inline-block; font-size: 12px; padding: 0 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
 .badge.ok { color: var(--ok); border-color: var(--ok); } .badge.fail { color: var(--fail); border-color: var(--fail); }
 .badge.free { color: var(--accent); border-color: var(--accent); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chips:empty { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 8px;
+  background: var(--code-bg); border: 1px solid var(--border); max-width: 100%; }
+.chip .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.chip button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.composer.drop { outline: 2px dashed var(--accent); }
 .warn { background: var(--warn-bg); color: var(--warn-text); padding: 7px 10px; border-radius: 8px; font-size: 13px; }
 .err { background: var(--err-bg); color: var(--err-text); padding: 7px 10px; border-radius: 8px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .num { width: 64px !important; text-align: center; }
@@ -218,6 +225,61 @@ function toast(msg) {
   const t = $("#toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
 }
+// 重试倒计时：带 data-at 的元素每 0.5 秒刷新“N 秒后重试”
+function noteSpan(cls, note, at) {
+  const el = h("span", { class: cls });
+  if (at) { el.classList.add("cd"); el.dataset.note = note; el.dataset.at = at; el.textContent = cdText(note, +at); }
+  else el.textContent = note;
+  return el;
+}
+function cdText(note, at) {
+  const left = Math.ceil((at - Date.now()) / 1000);
+  return note.replace(/\d+ 秒后重试/, left > 0 ? `${left} 秒后重试` : "正在重试");
+}
+setInterval(() => document.querySelectorAll(".cd").forEach((el) => { el.textContent = cdText(el.dataset.note, +el.dataset.at); }), 500);
+
+// 上传文档：txt / md / pdf / docx，后端提取文字；list 是 [{name, text, chars, truncated}]
+const ATTACH_ACCEPT = ".txt,.md,.markdown,.csv,.json,.log,.pdf,.docx";
+function readB64(file) {
+  return new Promise((ok, bad) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(",")[1] || "");
+    r.onerror = () => bad(new Error(`读取 ${file.name} 失败`));
+    r.readAsDataURL(file);
+  });
+}
+async function addFiles(files, list, redraw) {
+  for (const f of files) {
+    if (list.length >= 5) { toast("最多上传 5 个文件"); break; }
+    if (f.size > 10 * 1024 * 1024) { toast(`${f.name} 超过 10MB`); continue; }
+    const item = { name: f.name, loading: true };
+    list.push(item); redraw();
+    try {
+      Object.assign(item, await api("POST", "/api/extract", { name: f.name, data: await readB64(f) }), { loading: false });
+      if (item.truncated) toast(`${f.name} 共 ${item.chars} 字，只发送前 ${item.text.length} 字`);
+    } catch (e) { list.splice(list.indexOf(item), 1); toast(e.message); }
+    redraw();
+  }
+}
+function attachChips(list, redraw) {
+  return h("div", { class: "chips" }, list.map((a) => h("span", { class: "chip", title: a.name },
+    h("span", { class: "n" }, `📄 ${a.name}`),
+    h("span", { class: "hint" }, a.loading ? "读取中…" : `${a.truncated ? "前 " + a.text.length : a.chars} 字`),
+    redraw ? h("button", { title: "移除", onclick: () => { list.splice(list.indexOf(a), 1); redraw(); } }, "✕") : null)));
+}
+function attachButton(list, redraw) {
+  const input = h("input", { type: "file", multiple: true, accept: ATTACH_ACCEPT, style: "display:none",
+    onchange: (e) => { addFiles([...e.target.files], list, redraw); e.target.value = ""; } });
+  return [input, h("button", { class: "btn small", title: "支持 txt、md、pdf、docx，文字会发给每个参会 AI", onclick: () => input.click() }, "📎 上传文档")];
+}
+function enableDrop(el, list, redraw) {
+  el.addEventListener("dragover", (e) => { e.preventDefault(); el.classList.add("drop"); });
+  el.addEventListener("dragleave", () => el.classList.remove("drop"));
+  el.addEventListener("drop", (e) => { e.preventDefault(); el.classList.remove("drop"); addFiles([...e.dataTransfer.files], list, redraw); });
+}
+const attPayload = (list) => list.filter((a) => !a.loading).map(({ name, text }) => ({ name, text }));
+const attNames = (list) => (list || []).length ? h("div", { class: "chips" }, list.map((a) => h("span", { class: "chip", title: a.name }, h("span", { class: "n" }, `📄 ${a.name}`)))) : null;
+
 async function api(method, path, body) {
   const opt = { method, headers: {} };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
@@ -301,7 +363,7 @@ const S = {
   mode: "new",      // new | debate | settings
   tab: "people",    // 右栏：people | report
   cur: null,        // 当前打开的辩论
-  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7, retries: 2 },
+  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7, retries: 2, atts: [] },
 };
 const app = $("#app");
 
@@ -444,12 +506,18 @@ function renderNewComposer() {
   const bg = h("textarea", { class: "box", rows: 4, placeholder: "背景材料（可选，会原样发给每个参会 AI）：价格对比表、现状描述等", value: st.background,
     style: st.showBg ? "margin-top:6px" : "display:none;margin-top:6px", oninput: (e) => { st.background = e.target.value; } });
   const wrap = $("#composer-wrap"); wrap.innerHTML = "";
-  wrap.append(h("div", { class: "composer" }, topic, bg,
+  const chips = h("div");
+  const redraw = () => { chips.replaceChildren(attachChips(st.atts, redraw)); validateSetup(); };
+  redraw();
+  const box = h("div", { class: "composer" }, topic, bg, chips,
     h("div", { class: "composer-bar" },
       h("button", { class: "btn small", onclick: () => { st.showBg = !st.showBg; bg.style.display = st.showBg ? "" : "none"; if (st.showBg) bg.focus(); } }, "＋ 背景材料"),
+      ...attachButton(st.atts, redraw),
       h("span", { class: "hint", id: "start-reason" }),
       h("span", { class: "spacer" }),
-      h("button", { class: "btn primary", id: "btn-start", onclick: startDebate }, "开始辩论"))));
+      h("button", { class: "btn primary", id: "btn-start", onclick: startDebate }, "开始辩论")));
+  enableDrop(box, st.atts, redraw);
+  wrap.append(box);
   validateSetup();
   topic.focus();
 }
@@ -545,7 +613,7 @@ async function startDebate() {
   const st = S.setup;
   const [sp, sm] = (st.synth || "").split("|");
   const body = {
-    topic: st.topic.trim(), background: st.background,
+    topic: st.topic.trim(), background: st.background, attachments: attPayload(st.atts),
     participants: chosen().map((s) => ({ provider: s.provider, model: s.model.trim(), role: s.role.trim() })),
     blind_round: st.blind, debate_rounds: st.rounds,
     synthesis: sp ? { provider: sp, model: sm } : null,
@@ -554,7 +622,7 @@ async function startDebate() {
   $("#btn-start").disabled = true;
   try {
     const { debate_id } = await api("POST", "/api/debates", body);
-    st.topic = ""; st.background = "";
+    st.topic = ""; st.background = ""; st.atts = [];
     await openDebate(debate_id);
     loadHistory();
   } catch (e) { toast(e.message); validateSetup(); }
@@ -569,7 +637,7 @@ async function openDebate(id) {
   if (!PROVIDERS.length) await loadProviders();
   const keepTab = S.cur && S.cur.id === id ? S.tab : null;
   S.mode = "debate";
-  S.cur = { id, d, es: null, synthLive: null, reportIdx: null, edits: {}, synthEdit: null, followup: "", extra: 1 };
+  S.cur = { id, d, es: null, synthLive: null, reportIdx: null, edits: {}, synthEdit: null, followup: "", atts: [], extra: 1 };
   S.tab = keepTab || (reportsOf(d).length || d.active ? "report" : "people");
   setRightVisible(true);
   $("#btn-show-right").textContent = "📄 报告";
@@ -585,7 +653,7 @@ function colorOf(pid) {
   const i = S.cur.d.config.participants.findIndex((p) => p.id === pid);
   return COLORS[(i < 0 ? 0 : i) % COLORS.length];
 }
-function inputBefore(d, idx) { const it = (d.inputs || []).find((x) => x.before_round === idx); return it ? it.text : ""; }
+function inputBefore(d, idx) { return (d.inputs || []).find((x) => x.before_round === idx) || null; }
 function roundTitle(d, idx) { return idx === 0 ? (d.config.blind_round ? "第 0 轮 · 盲写" : "第 0 轮 · 公开首轮") : `第 ${idx} 轮 · 交叉辩论`; }
 function renderAll() { renderLeft(); renderMidHead(); renderMidBody(); renderComposer(); renderRight(); }
 function renderMidHead() {
@@ -598,15 +666,15 @@ function msgEl(m, r) {
   const body = h("div", { class: "msg-body", id: `mb-${r}-${m.participant}` });
   if (m.status === "ok") { body.classList.add("md"); body.innerHTML = md(m.text); }
   else if (m.status === "failed") body.append(h("div", { class: "err" }, m.error || "失败"));
-  else if (m.status === "running") { body.classList.add("plain"); body.textContent = m.text || ""; if (!m.text) body.append(h("span", { class: "hint" }, m.note || "思考中…")); }
+  else if (m.status === "running") { body.classList.add("plain"); body.textContent = m.text || ""; if (!m.text) body.append(noteSpan("hint", m.note || "思考中…", m.retryAt)); }
   else body.append(h("span", { class: "hint" }, "等待发言"));
-  const st = m.status === "running" && m.note ? m.note : (MSG_STATUS[m.status] || m.status);
+  const st = m.status === "running" && m.note ? noteSpan("meta", m.note, m.retryAt) : h("span", { class: "meta" }, MSG_STATUS[m.status] || m.status);
   return h("div", { class: "msg", id: `m-${r}-${m.participant}` },
     h("div", { class: "avatar", style: `background:${colorOf(m.participant)}` }, providerName(m.provider).slice(0, 1)),
     h("div", { class: "msg-main" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, seatLabel({ provider: m.provider, id: m.participant })),
         h("span", { class: "meta", title: m.role || "中立客观的专家" }, `${m.model} · ${roleShort(m.role || "")}`),
-        h("span", { class: `dot ${m.status}` }), h("span", { class: "meta" }, st)),
+        h("span", { class: `dot ${m.status}` }), st),
       body,
       m.usage ? h("div", { class: "msg-foot" }, renderUsage(m.usage)) : null));
 }
@@ -616,11 +684,12 @@ function renderMidBody() {
   box.innerHTML = "";
   const col = h("div", { class: "col" });
   col.append(h("div", { class: "bubble-user" }, h("div", { class: "lbl" }, "话题"), d.topic,
-    d.background && d.background.trim() ? h("details", { style: "margin-top:6px" }, h("summary", {}, "背景材料"), d.background) : null));
+    d.background && d.background.trim() ? h("details", { style: "margin-top:6px" }, h("summary", {}, "背景材料"), d.background) : null,
+    attNames(d.attachments)));
   const reps = reportsOf(d);
   d.rounds.forEach((rnd) => {
     const extra = inputBefore(d, rnd.index);
-    if (extra) col.append(h("div", { class: "bubble-user" }, h("div", { class: "lbl" }, "你的补充"), extra));
+    if (extra) col.append(h("div", { class: "bubble-user" }, h("div", { class: "lbl" }, "你的补充"), extra.text || "", attNames(extra.attachments)));
     col.append(h("div", { class: "round-sep" }, roundTitle(d, rnd.index)));
     rnd.messages.forEach((m) => col.append(msgEl(m, rnd.index)));
     reps.forEach((rep, k) => {
@@ -632,7 +701,7 @@ function renderMidBody() {
   });
   const live = S.cur.synthLive;
   if (live && live.status === "running") col.append(h("div", { class: "report-chip", onclick: () => showReport(null) },
-    h("span", { class: "dot running" }), h("span", { class: "t" }, "正在写综合报告…"), h("span", { class: "hint" }, live.note || `由 ${live.by}`)));
+    h("span", { class: "dot running" }), h("span", { class: "t" }, "正在写综合报告…"), noteSpan("hint", live.note || `由 ${live.by}`, live.note && live.retryAt)));
   else if (!d.active && d.synthesis && d.synthesis.status === "failed")
     col.append(h("div", { class: "err", style: "margin:16px 0" }, `综合报告生成失败：${d.synthesis.error || ""}\n可以在右侧“参会者”里换一个综合者，然后点“重新综合”。`));
   if (!d.active && !d.rounds.length) col.append(h("div", { class: "empty" }, "还没有发言记录"));
@@ -653,8 +722,12 @@ function renderComposer() {
     oninput: (e) => { cur.followup = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) continueDebate(); } });
   const edits = Object.keys(cur.edits).length + (cur.synthEdit ? 1 : 0) + (cur.retriesEdit != null ? 1 : 0);
-  wrap.append(h("div", { class: "composer" }, ta,
+  const chips = h("div");
+  const redraw = () => chips.replaceChildren(attachChips(cur.atts, redraw));
+  redraw();
+  const box = h("div", { class: "composer" }, ta, chips,
     h("div", { class: "composer-bar" },
+      ...attachButton(cur.atts, redraw),
       h("span", {}, "再辩"),
       h("input", { type: "number", class: "num", min: 1, max: 10, value: cur.extra, "aria-label": "再辩轮数",
         oninput: (e) => { cur.extra = Math.max(1, Math.min(10, +e.target.value || 1)); } }),
@@ -662,7 +735,9 @@ function renderComposer() {
       edits ? h("span", { class: "badge free" }, `已改 ${edits} 处设置`) : null,
       h("span", { class: "spacer" }),
       hasFailed(d) ? h("button", { class: "btn", title: "只重跑失败的发言，然后重新综合", onclick: () => resume({ retry_failed: true }) }, "重试失败的发言") : null,
-      h("button", { class: "btn primary", onclick: continueDebate }, "继续辩论"))));
+      h("button", { class: "btn primary", onclick: continueDebate }, "继续辩论")));
+  enableDrop(box, cur.atts, redraw);
+  wrap.append(box);
 }
 function editsPayload() {
   const cur = S.cur, body = {};
@@ -674,13 +749,14 @@ function editsPayload() {
 }
 function continueDebate() {
   const cur = S.cur;
-  resume({ retry_failed: hasFailed(cur.d), extra_rounds: cur.extra, user_input: cur.followup.trim() });
+  if (cur.atts.some((a) => a.loading)) { toast("文档还在读取，请稍等"); return; }
+  resume({ retry_failed: hasFailed(cur.d), extra_rounds: cur.extra, user_input: cur.followup.trim(), attachments: attPayload(cur.atts) });
 }
 async function resume(extraBody) {
   const cur = S.cur;
   try {
     await api("POST", `/api/debates/${cur.id}/resume`, { ...editsPayload(), ...extraBody });
-    cur.followup = ""; cur.edits = {}; cur.synthEdit = null; cur.retriesEdit = null; cur.reportIdx = null; S.tab = "report";
+    cur.followup = ""; cur.atts = []; cur.edits = {}; cur.synthEdit = null; cur.retriesEdit = null; cur.reportIdx = null; S.tab = "report";
     await refreshCurrent(true);
     loadHistory();
   } catch (e) { toast(e.message); }
@@ -723,7 +799,7 @@ function renderReportTab(body) {
   const cur = S.cur, d = cur.d, reps = reportsOf(d), live = cur.synthLive;
   if (live && (cur.reportIdx === null || !reps.length)) {
     body.append(h("div", { class: "row", style: "margin-bottom:8px" }, h("span", { class: `dot ${live.status === "failed" ? "failed" : "running"}` }),
-      h("strong", {}, "正在综合"), h("span", { class: "hint" }, live.note || `由 ${live.by}`)));
+      h("strong", {}, "正在综合"), noteSpan("hint", live.note || `由 ${live.by}`, live.note && live.retryAt)));
     if (live.status === "failed") body.append(h("div", { class: "err" }, live.error || "失败"));
     body.append(h("div", { class: "msg-body plain", id: "live-report" }, live.text || ""));
     return;
@@ -818,7 +894,7 @@ function connectEvents(id) {
     }
   });
   on("participant_started", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "running", text: "", note: null, usage: null }); redrawMsg(x.round, m); } });
-  on("participant_retry", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "running", text: "", note: x.note }); redrawMsg(x.round, m); } });
+  on("participant_retry", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "running", text: "", note: x.note, retryAt: x.retry_at }); redrawMsg(x.round, m); } });
   on("token", (x) => {
     const m = findMsg(x.round, x.participant); if (!m) return;
     const first = !m.text; m.text = (m.text || "") + x.delta;
@@ -831,7 +907,7 @@ function connectEvents(id) {
   on("message_done", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "ok", text: x.text, usage: x.usage, note: null }); redrawMsg(x.round, m); } });
   on("message_failed", (x) => { const m = findMsg(x.round, x.participant); if (m) { Object.assign(m, { status: "failed", error: x.error, note: null }); redrawMsg(x.round, m); } });
   on("synthesis_started", (x) => { S.cur.synthLive = { by: x.by, text: "", status: "running" }; S.cur.reportIdx = null; S.tab = "report"; renderMidBody(); renderRight(); });
-  on("synthesis_retry", (x) => { const l = S.cur.synthLive; if (!l) return; l.text = ""; l.note = x.note; if (x.by) l.by = x.by; renderMidBody(); renderRight(); });
+  on("synthesis_retry", (x) => { const l = S.cur.synthLive; if (!l) return; l.text = ""; l.note = x.note; l.retryAt = x.retry_at; if (x.by) l.by = x.by; renderMidBody(); renderRight(); });
   on("synthesis_token", (x) => {
     const l = S.cur.synthLive; if (!l) return; l.text += x.delta;
     const el = $("#live-report"); if (el) el.textContent = l.text;

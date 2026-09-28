@@ -254,7 +254,7 @@ class OfflineE2E(unittest.TestCase):
             providers.chat("groq", "always-429", "s", "u", 200, 0.5, False, max_retries=0)
         self.assertIn("已重试 0 次", cm.exception.msg)
         notes = []
-        r = providers.chat("groq", "fail-once-a", "s", "u", 200, 0.5, False, on_retry=notes.append)
+        r = providers.chat("groq", "fail-once-a", "s", "u", 200, 0.5, False, on_retry=lambda n, w: notes.append(n))
         self.assertIn("我的观点", r["text"])
         self.assertIn("503", notes[0])
 
@@ -391,6 +391,61 @@ class OfflineE2E(unittest.TestCase):
         self.assertEqual(st, 409)
         st, r = self.jcall("POST", f"/api/debates/{did}/resume", {"user_input": "x"})
         self.assertEqual(st, 409)
+
+    def test_18_upload_and_attachments(self):
+        import base64, io, zipfile, zlib
+        def up(name, data):
+            return self.jcall("POST", "/api/extract", {"name": name, "data": base64.b64encode(data).decode()})
+        st, r = up("a.md", "# 冰柜对比\n价格 2800".encode())
+        self.assertEqual(st, 200, r)
+        self.assertIn("价格 2800", r["text"])
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                       '<w:body><w:p><w:r><w:t>docx 里的预算表</w:t></w:r></w:p></w:body></w:document>')
+        st, r = up("b.docx", buf.getvalue())
+        self.assertEqual((st, r["text"]), (200, "docx 里的预算表"))
+        c = zlib.compress(b"BT /F1 12 Tf 72 700 Td (PDF text) Tj ET")
+        pdf = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]>>endobj\n"
+               b"3 0 obj<</Type/Page/Parent 2 0 R/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>endobj\n"
+               b"4 0 obj<</Type/Font/Subtype/Type1>>endobj\n5 0 obj<</Filter/FlateDecode>>stream\n" + c + b"\nendstream endobj\n")
+        st, r = up("c.pdf", pdf)
+        self.assertEqual((st, r["text"]), (200, "PDF text"))
+        st, r = up("d.xlsx", b"x")
+        self.assertEqual(st, 422)
+        st, r = up("e.txt", ("长" * 30000).encode())
+        self.assertTrue(r["truncated"])
+        self.assertEqual(len(r["text"]), 20000)
+
+        mock_providers.MockHandler.requests.clear()
+        body = {"topic": "带附件", "debate_rounds": 0, "background": "手写背景",
+                "attachments": [{"name": "价格表.pdf", "text": "附件里的价格 1999"}],
+                "participants": [{"provider": "groq", "model": "m-a"}, {"provider": "gemini", "model": "m-b"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        did = r["debate_id"]
+        self.events(did)
+        st, r = self.jcall("POST", f"/api/debates/{did}/resume", {
+            "extra_rounds": 1, "attachments": [{"name": "补充.docx", "text": "补充文档内容 42"}]})
+        self.assertEqual(st, 202, r)
+        self.events(did)
+        d = store.load_debate(did)
+        self.assertEqual(d["attachments"][0]["name"], "价格表.pdf")
+        self.assertEqual(d["inputs"][0]["attachments"][0]["name"], "补充.docx")
+        texts = [json.dumps(rq["body"], ensure_ascii=False) for rq in mock_providers.MockHandler.requests]
+        self.assertEqual(sum("附件里的价格 1999" in t and "手写背景" in t for t in texts), 2)  # 首轮两位都收到
+        self.assertEqual(sum("补充文档内容 42" in t for t in texts), 2)
+        synth = [t for t in texts if "综合报告（Markdown）" in t][-1]
+        self.assertIn("附件：补充.docx", synth)
+        self.assertNotIn("补充文档内容 42", synth)
+
+    def test_19_retry_event_has_countdown(self):
+        body = {"topic": "倒计时", "debate_rounds": 0, "participants": [
+            {"provider": "groq", "model": "fail-once-cd"}, {"provider": "gemini", "model": "ok"}]}
+        st, r = self.jcall("POST", "/api/debates", body)
+        evs = self.events(r["debate_id"])
+        rt = [x for e, x in evs if e == "participant_retry"]
+        self.assertTrue(rt)
+        self.assertGreater(rt[0]["retry_at"], 1e12)
 
     def test_16_quote_trim(self):
         u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])

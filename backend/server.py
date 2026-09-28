@@ -1,6 +1,7 @@
 """HTTP 路由（基于 http.server）+ SSE + 静态前端（规格第 7 节）。"""
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import logging
@@ -12,13 +13,13 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import debate as debate_mod
-from . import providers, store
+from . import extract, providers, store
 from .providers import ProviderError
 
 log = logging.getLogger("ai-council.server")
 
 INDEX_HTML = store.ROOT / "frontend" / "index.html"
-MAX_BODY = 1024 * 1024  # 背景材料可能较长，放宽到 1MB
+MAX_BODY = 16 * 1024 * 1024  # 上传的文档以 base64 放在 JSON 里（单个文件上限 10MB）
 SSE_KEEPALIVE = 15
 
 manager = debate_mod.DebateManager()
@@ -94,6 +95,27 @@ def refresh_models(h, body, pid):
         raise ApiError(502, f"刷新模型列表失败：{e.msg}") from None
     h.send_json({"provider": pid, "models": entry["models"], "updated_at": entry["updated_at"],
                  "default_model": providers.default_model(pid)})
+
+
+@route("POST", r"/api/extract")
+def extract_text(h, body):
+    """上传文档提取文字：body {"name": 文件名, "data": base64}；返回 {name, text, chars, truncated}"""
+    if not isinstance(body, dict) or not body.get("name") or not body.get("data"):
+        raise ApiError(400, "缺少文件")
+    name = str(body["name"])
+    try:
+        data = base64.b64decode(str(body["data"]), validate=False)
+    except (ValueError, TypeError):
+        raise ApiError(400, "文件数据格式不正确") from None
+    try:
+        text = extract.extract(name, data)
+    except extract.ExtractError as e:
+        raise ApiError(422, f"{name}：{e}") from None
+    except Exception:  # 解析器对畸形文件的兜底
+        log.exception("提取 %s 失败", name)
+        raise ApiError(422, f"{name}：无法读取这个文件") from None
+    h.send_json({"name": name, "text": text[:extract.TEXT_LIMIT], "chars": len(text),
+                 "truncated": len(text) > extract.TEXT_LIMIT})
 
 
 # ---------------------------------------------------------------- debates
@@ -240,6 +262,8 @@ def export_markdown(d: dict) -> str:
     lines.append("")
     if (d.get("background") or "").strip():
         lines += ["## 背景材料", "", d["background"].strip(), ""]
+    if d.get("attachments"):
+        lines += ["附件：" + "、".join(a["name"] for a in d["attachments"]), ""]
     syn = d.get("synthesis") or {}
     lines += ["## 综合报告", ""]
     if syn.get("status") == "ok":
@@ -251,7 +275,7 @@ def export_markdown(d: dict) -> str:
         lines.append(f"（未生成{('：' + syn['error']) if syn.get('error') else ''}）")
     lines += ["", "## 辩论记录", ""]
     for rnd in d.get("rounds", []):
-        extra = debate_mod.input_before(d, rnd["index"])
+        extra = debate_mod.input_summary(d, rnd["index"])
         if extra:
             lines += [f"### 提问者补充（第 {rnd['index']} 轮之前）", "", extra, ""]
         lines += [f"### {debate_mod.round_title(rnd['index'], cfg['blind_round'])}", ""]

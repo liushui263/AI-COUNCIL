@@ -110,6 +110,9 @@ class MockHandler(BaseHTTPRequestHandler):
         if model.startswith("fail-once") and n == 1:
             self._json(503, {"error": {"message": "overloaded"}}, {"Retry-After": "0"})
             return True
+        if model.startswith("wait429") and n == 1:
+            self._json(429, {"error": {"message": "rate limited"}}, {"Retry-After": "12"})
+            return True
         if model == "always-503":
             self._json(503, {"error": {"message": "This model is currently experiencing high demand."}})
             return True

@@ -607,7 +607,7 @@ def chat(provider_id: str, model: str, system: str, user: str,
          on_token=None, on_retry=None, max_retries: int | None = None) -> dict:
     """返回 {"text": str, "usage": {"prompt_tokens": int, "completion_tokens": int} | None}
 
-    on_retry(msg)：发生重试前回调（流式输出已发出的内容需要前端清空重来）。
+    on_retry(msg, wait)：发生重试前回调，wait 为等待秒数（流式输出已发出的内容需要前端清空重来）。
     max_retries：限流/过载/网络错误最多重试几次（默认 DEFAULT_RETRIES）；仍失败就抛错，由调用方交给下一位。
     """
     p = get_provider(provider_id)
@@ -642,7 +642,7 @@ def chat(provider_id: str, model: str, system: str, user: str,
                 tries += 1
                 log.info("%s/%s %s，%.0fs 后第 %s 次重试", provider_id, model, note, wait, tries)
                 if on_retry:
-                    on_retry(f"{note}，{wait:.0f} 秒后重试（第 {tries}/{limit} 次）")
+                    on_retry(f"{note}，{wait:.0f} 秒后重试（第 {tries}/{limit} 次）", wait)
                 time.sleep(wait)
                 continue
             if busy or net:

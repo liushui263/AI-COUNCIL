@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from . import providers, store
+from . import extract, providers, store
 from .providers import ProviderError
 
 log = logging.getLogger("ai-council.debate")
@@ -93,11 +94,60 @@ def cross_user(topic: str, others: list, user_input: str = "", last_report: str 
     return "\n".join(parts)
 
 
-def input_before(debate: dict, idx: int) -> str:
+def _retry_at(wait: float) -> int:
+    """重试时刻（毫秒时间戳），前端据此显示倒计时。"""
+    return int((time.time() + wait) * 1000)
+
+
+def attachments_of(raw) -> list:
+    """规范化上传的附件：[{name, text}]，每个截断到 TEXT_LIMIT 字。"""
+    if not raw:
+        return []
+    if not isinstance(raw, list):
+        raise ValidationError("attachments 必须是数组")
+    if len(raw) > extract.MAX_FILES:
+        raise ValidationError(f"最多上传 {extract.MAX_FILES} 个文件")
+    out = []
+    for a in raw:
+        if not isinstance(a, dict) or not str(a.get("text") or "").strip():
+            raise ValidationError("附件格式不正确")
+        out.append({"name": str(a.get("name") or "附件")[:200],
+                    "text": str(a["text"]).strip()[:extract.TEXT_LIMIT]})
+    return out
+
+
+def with_attachments(text: str, atts: list) -> str:
+    parts = [text.strip()] if text and text.strip() else []
+    for a in atts or []:
+        parts.append(f"【附件：{a['name']}】\n{a['text']}")
+    return "\n\n".join(parts)
+
+
+def full_background(debate: dict) -> str:
+    return with_attachments(debate.get("background") or "", debate.get("attachments"))
+
+
+def _input_at(debate: dict, idx: int):
     for it in debate.get("inputs") or []:
         if it.get("before_round") == idx:
-            return it.get("text") or ""
-    return ""
+            return it
+    return None
+
+
+def input_before(debate: dict, idx: int) -> str:
+    """提问者在第 idx 轮之前的补充（含附件全文），用于发言提示。"""
+    it = _input_at(debate, idx)
+    return with_attachments(it.get("text") or "", it.get("attachments")) if it else ""
+
+
+def input_summary(debate: dict, idx: int) -> str:
+    """同上，但附件只列文件名（综合报告只需要知道补充了什么）。"""
+    it = _input_at(debate, idx)
+    if not it:
+        return ""
+    names = [a["name"] for a in it.get("attachments") or []]
+    text = it.get("text") or ""
+    return (text + (f"\n（附件：{'、'.join(names)}）" if names else "")).strip()
 
 
 def build_transcript(debate: dict) -> str:
@@ -106,7 +156,7 @@ def build_transcript(debate: dict) -> str:
     participants = debate["config"]["participants"]
     ever_ok = set()
     for rnd in debate["rounds"]:
-        extra = input_before(debate, rnd["index"])
+        extra = input_summary(debate, rnd["index"])
         if extra:
             out.append(f"=== 提问者在第 {rnd['index']} 轮之前补充 ===\n{extra}\n")
         title = round_title(rnd["index"], debate["config"]["blind_round"])
@@ -216,6 +266,7 @@ def validate(body: dict) -> dict:
     return {
         "topic": topic,
         "background": background,
+        "attachments": attachments_of(body.get("attachments")),
         "config": {
             "participants": participants,
             "blind_round": blind,
@@ -265,6 +316,7 @@ class DebateManager:
             "created_at": store.now_iso(),
             "topic": cfg["topic"],
             "background": cfg["background"],
+            "attachments": cfg["attachments"],
             "config": cfg["config"],
             "rounds": [],
             "synthesis": None,
@@ -328,7 +380,8 @@ class DebateManager:
         retry = bool(body.get("retry_failed"))
         extra = _num(body.get("extra_rounds"), int, "追加轮数", 0, MAX_EXTRA_ROUNDS, 0)
         user_input = str(body.get("user_input") or "").strip()
-        if user_input and not extra:
+        atts = attachments_of(body.get("attachments"))
+        if (user_input or atts) and not extra:
             raise ValidationError("补充了新内容时，至少要再辩论 1 轮")
         cfg = debate["config"]
 
@@ -356,9 +409,11 @@ class DebateManager:
                           if not providers.key_ok(p["provider"])})
         if missing:
             raise ValidationError(f"以下 provider 的 key 尚未配置：{'、'.join(missing)}。请先到设置页配置")
-        if user_input:
-            debate.setdefault("inputs", []).append(
-                {"before_round": len(debate["rounds"]), "text": user_input, "at": store.now_iso()})
+        if user_input or atts:
+            item = {"before_round": len(debate["rounds"]), "text": user_input, "at": store.now_iso()}
+            if atts:
+                item["attachments"] = atts
+            debate.setdefault("inputs", []).append(item)
         cfg["debate_rounds"] = max(cfg["debate_rounds"], len(debate["rounds"]) - 1) + extra
         debate["status"] = "running"
         debate.pop("error", None)
@@ -393,8 +448,9 @@ class DebateManager:
         def on_token(delta):
             run.emit("token", {"round": rnd_idx, "participant": pid, "delta": delta})
 
-        def on_retry(note):
-            run.emit("participant_retry", {"round": rnd_idx, "participant": pid, "note": note})
+        def on_retry(note, wait=0):
+            run.emit("participant_retry", {"round": rnd_idx, "participant": pid, "note": note,
+                                           "retry_at": _retry_at(wait)})
 
         try:
             res = providers.chat(msg["provider"], msg["model"], system, user,
@@ -427,7 +483,7 @@ class DebateManager:
     def _prompt(self, d: dict, m: dict, idx: int, prev: dict | None) -> tuple:
         system = BLIND_SYSTEM.format(role=m["role"] or DEFAULT_ROLE)
         if idx == 0:
-            return system, blind_user(d["topic"], d["background"])
+            return system, blind_user(d["topic"], full_background(d))
         # 上下文裁剪：只带“其他人上一轮”的发言
         others = [x for x in prev["messages"] if x["status"] == "ok" and x["participant"] != m["participant"]]
         extra = input_before(d, idx)
@@ -450,7 +506,7 @@ class DebateManager:
                 pos = rnd["messages"].index(m)
                 earlier = [x for x in rnd["messages"][:pos] if x["status"] == "ok"]
                 system = OPEN_SYSTEM.format(role=m["role"] or DEFAULT_ROLE)
-                self._call(run, idx, m, system, open_user(d["topic"], d["background"], earlier))
+                self._call(run, idx, m, system, open_user(d["topic"], full_background(d), earlier))
                 self._save(d)
             return
 
@@ -492,8 +548,8 @@ class DebateManager:
         def on_token(delta):
             run.emit("synthesis_token", {"delta": delta})
 
-        def on_retry(note):
-            run.emit("synthesis_retry", {"note": note})
+        def on_retry(note, wait=0):
+            run.emit("synthesis_retry", {"note": note, "retry_at": _retry_at(wait)})
 
         # TODO(规格待确认)：综合报告较长，max_tokens 至少给 2000，避免四个章节被截断；温度不高于 0.7 以求忠实
         max_tokens = max(d["config"]["max_tokens"], 2000)
