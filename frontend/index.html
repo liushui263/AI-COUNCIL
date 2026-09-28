@@ -27,13 +27,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
 
 /* ---------- 三栏布局 ---------- */
-.app { display: grid; grid-template-columns: 260px minmax(0, 1fr) 380px; height: 100vh; height: 100dvh; }
+.app { display: grid; grid-template-columns: 260px minmax(0, 1fr) 460px; height: 100vh; height: 100dvh; }
 .app.no-right { grid-template-columns: 260px minmax(0, 1fr) 0; }
 .app.no-right .right { display: none; }
 .left { background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
 .mid { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .right { background: var(--panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-@media (max-width: 1180px) { .app { grid-template-columns: 230px minmax(0, 1fr) 330px; } .app.no-right { grid-template-columns: 230px minmax(0, 1fr) 0; } }
+@media (max-width: 1280px) { .app { grid-template-columns: 230px minmax(0, 1fr) 400px; } .app.no-right { grid-template-columns: 230px minmax(0, 1fr) 0; } }
 @media (max-width: 880px) {
   .app, .app.no-right { grid-template-columns: minmax(0, 1fr); }
   .left, .right { position: fixed; top: 0; bottom: 0; z-index: 30; width: min(86vw, 360px); transition: transform .2s; box-shadow: 0 0 24px rgba(0,0,0,.2); }
@@ -45,7 +45,7 @@ a { color: var(--accent); }
 }
 .scrim { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 25; }
 .only-narrow { display: none !important; }
-@media (max-width: 880px) { .only-narrow { display: inline-flex !important; } }
+@media (max-width: 880px) { .only-narrow { display: inline-flex !important; } .only-wide { display: none !important; } }
 
 /* ---------- 左栏 ---------- */
 .left-top { padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 10px; }
@@ -109,12 +109,19 @@ a { color: var(--accent); }
 .right-body { flex: 1; overflow-y: auto; padding: 14px; }
 .sec { margin-bottom: 18px; }
 .sec h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
-.seat { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--bg); }
-.seat.off { opacity: .65; }
-.seat-top { display: flex; gap: 8px; align-items: center; }
-.seat-top .name { font-weight: 600; flex: 1; min-width: 0; }
-.seat-fields { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 6px; }
-.seat.off .seat-fields { display: none; }
+/* 参会者：一人一行（勾选 · 名称 · 模型 · 角色 · 加减） */
+.seats { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.seat { display: grid; grid-template-columns: 20px 92px minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 6px; align-items: center;
+  padding: 5px 8px; border-top: 1px solid var(--border); background: var(--panel); }
+.seat.people { grid-template-columns: 22px 88px minmax(0, 1.5fr) minmax(0, 1fr); }
+.seat:first-child { border-top: 0; }
+.seat.off .sel { opacity: .5; }
+.seat .name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.seat .sel { padding: 4px 6px; font-size: 13px; }
+.seat .acts { display: flex; gap: 2px; }
+.seat .acts button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px 5px; border-radius: 6px; }
+.seat .acts button:hover { background: var(--code-bg); color: var(--text); }
+.seat .nokey { grid-column: 3 / 5; font-size: 13px; }
 
 /* ---------- 通用控件 ---------- */
 input[type=text], input[type=password], input[type=number], textarea.box, select {
@@ -175,6 +182,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
       <div class="title" id="mid-title">新辩论</div>
       <span class="hint" id="mid-status"></span>
       <button class="btn icon only-narrow" id="btn-show-right" aria-label="打开侧栏">⚙ 参会者</button>
+      <button class="btn small only-wide" id="btn-toggle-right" title="隐藏/显示右侧栏">隐藏侧栏 ⇥</button>
     </div>
     <div class="mid-body" id="mid-body"></div>
     <div class="composer-wrap" id="composer-wrap"></div>
@@ -293,7 +301,7 @@ const S = {
   mode: "new",      // new | debate | settings
   tab: "people",    // 右栏：people | report
   cur: null,        // 当前打开的辩论
-  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7 },
+  setup: { seats: null, topic: "", background: "", showBg: false, blind: true, rounds: 2, synth: "", maxTokens: 1500, temperature: 0.7, retries: 2 },
 };
 const app = $("#app");
 
@@ -335,7 +343,71 @@ function renderLeft() {
 $("#btn-new").onclick = () => { closeDrawers(); showNew(); };
 $("#btn-settings").onclick = () => { closeDrawers(); showSettings(); };
 
-function setRightVisible(on) { app.classList.toggle("no-right", !on); $("#btn-show-right").style.visibility = on ? "" : "hidden"; }
+// 右栏：设置页不需要；宽屏时用户也可以手动隐藏（记在本机浏览器里）
+let rightWanted = true, rightHidden = false;
+try { rightHidden = localStorage.getItem("aic.rightHidden") === "1"; } catch (_) { /* 无痕模式等 */ }
+function setRightVisible(on) {
+  rightWanted = on;
+  app.classList.toggle("no-right", !on || rightHidden);
+  $("#btn-show-right").style.visibility = on ? "" : "hidden";
+  const t = $("#btn-toggle-right");
+  t.style.visibility = on ? "" : "hidden";
+  t.textContent = rightHidden ? "⇤ 显示侧栏" : "隐藏侧栏 ⇥";
+}
+$("#btn-toggle-right").onclick = () => {
+  rightHidden = !rightHidden;
+  try { localStorage.setItem("aic.rightHidden", rightHidden ? "1" : "0"); } catch (_) { /* 忽略 */ }
+  setRightVisible(rightWanted);
+};
+
+// 角色预设：显示短名，发给模型的是完整说法（"你是一位{角色}"）
+const ROLES = [
+  ["", "中立（默认）"],
+  ["支持方：尽力论证这个选择的优点与可行性的专家", "支持"],
+  ["反对方：专门寻找这个选择的缺点与替代方案的专家", "反对"],
+  ["财务分析师，关注成本、预算与长期花费", "财务"],
+  ["技术开发专家，关注实现难度、可靠性与维护", "开发"],
+  ["风险控制专家，关注最坏情况、安全与合规", "风险"],
+  ["用户体验专家，关注实际使用感受与便利性", "体验"],
+  ["务实的执行者，关注时间、步骤与落地", "执行"],
+  ["魔鬼代言人，故意唱反调、挑出所有漏洞", "挑刺"],
+];
+function roleShort(v) { const r = ROLES.find((x) => x[0] === v); return r ? r[1].replace("（默认）", "") : (v || "中立"); }
+function roleSelect(value, onchange, disabled) {
+  const sel = h("select", { class: "sel", "aria-label": "角色", disabled, title: value || "中立客观的专家" });
+  const known = ROLES.some((r) => r[0] === (value || ""));
+  ROLES.forEach(([v, label]) => sel.append(h("option", { value: v }, label)));
+  if (!known) sel.append(h("option", { value }, `自定义：${value.slice(0, 12)}`));
+  sel.append(h("option", { value: "__custom" }, "自定义…"));
+  sel.value = value || "";
+  sel.onchange = () => {
+    if (sel.value === "__custom") {
+      const v = prompt("输入角色（例如：家庭主妇，关注省电和噪音）", known ? "" : value);
+      if (v === null) { sel.value = value || ""; return; }
+      onchange(v.trim()); return;
+    }
+    onchange(sel.value);
+  };
+  return sel;
+}
+function modelSelect(pid, value, onchange, disabled) {
+  const p = byId(pid);
+  const models = p && p.models.length ? p.models : [];
+  const opts = [...new Set([value, p ? p.default_model : "", ...models].filter(Boolean))];
+  const sel = h("select", { class: "sel", "aria-label": "模型", disabled, title: value });
+  opts.forEach((m) => sel.append(h("option", { value: m }, m + (p && m === p.default_model ? "（默认）" : ""))));
+  sel.append(h("option", { value: "__custom" }, "手动输入…"));
+  sel.value = value;
+  sel.onchange = () => {
+    if (sel.value === "__custom") {
+      const v = prompt("输入模型名", value);
+      if (v === null || !v.trim()) { sel.value = value; return; }
+      onchange(v.trim()); return;
+    }
+    onchange(sel.value);
+  };
+  return sel;
+}
 
 // ============================================================ 新建辩论
 function initSeats() {
@@ -387,26 +459,21 @@ function renderSetupPanel() {
     h("button", { class: "x only-narrow", onclick: closeDrawers }, "✕"));
   const body = $("#right-body"); body.innerHTML = "";
 
-  const seatsBox = h("div", {});
+  const seatsBox = h("div", { class: "seats" });
   st.seats.forEach((s, idx) => {
     const p = byId(s.provider); if (!p) return;
     const dup = st.seats.slice(0, idx).filter((x) => x.provider === s.provider).length;
-    let badge;
-    if (keyOk(p)) badge = h("span", { class: "badge ok" }, "已配置");
-    else badge = h("a", { href: "#", class: "badge fail", onclick: (e) => { e.preventDefault(); showSettings(); } }, "去配置 key");
+    const ok = keyOk(p);
+    const acts = h("div", { class: "acts" },
+      ok ? h("button", { title: "同一家再加一个席位（例如换个角色）", onclick: () => { st.seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: true, auto: s.auto }); renderSetupPanel(); } }, "＋") : null,
+      dup ? h("button", { title: "移除这个席位", onclick: () => { st.seats.splice(idx, 1); renderSetupPanel(); } }, "✕") : null);
     seatsBox.append(h("div", { class: "seat" + (s.on ? "" : " off") },
-      h("div", { class: "seat-top" },
-        h("input", { type: "checkbox", checked: s.on, "aria-label": `选择 ${p.name}`, onchange: (e) => {
-          if (e.target.checked && !keyOk(p)) { e.target.checked = false; toast(`${p.name} 需要 key，请先到设置页配置`); return; }
-          s.on = e.target.checked; renderSetupPanel(); } }),
-        h("span", { class: "name" }, p.name + (dup ? ` #${dup + 1}` : ""), " ", p.free ? h("span", { class: "badge free" }, "免费") : null),
-        badge,
-        h("button", { class: "btn small icon", title: "同一家再加一个席位（例如换个角色）", onclick: () => { st.seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: keyOk(p), auto: s.auto }); renderSetupPanel(); } }, "＋"),
-        dup ? h("button", { class: "btn small icon", title: "移除这个席位", onclick: () => { st.seats.splice(idx, 1); renderSetupPanel(); } }, "－") : null),
-      h("div", { class: "seat-fields" },
-        h("input", { type: "text", list: datalistFor(p.id), value: s.model, placeholder: "模型名", "aria-label": "模型",
-          oninput: (e) => { s.model = e.target.value; s.auto = false; validateSetup(); }, onchange: () => renderSetupPanel() }),
-        h("input", { type: "text", value: s.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色", oninput: (e) => { s.role = e.target.value; } }))));
+      h("input", { type: "checkbox", checked: s.on, disabled: !ok, "aria-label": `选择 ${p.name}`, onchange: (e) => { s.on = e.target.checked; renderSetupPanel(); } }),
+      h("span", { class: "name", title: p.free_tier_desc }, p.name + (dup ? ` #${dup + 1}` : "")),
+      ok ? modelSelect(p.id, s.model, (v) => { s.model = v; s.auto = false; s.on = true; renderSetupPanel(); }) : null,
+      ok ? roleSelect(s.role, (v) => { s.role = v; s.on = true; renderSetupPanel(); }) : null,
+      ok ? acts : h("a", { href: "#", class: "nokey hint", onclick: (e) => { e.preventDefault(); showSettings(); } }, p.free ? "免费 · 去配置 key" : "付费 · 去配置 key"),
+      ok ? null : h("span", {})));
   });
 
   const synthSel = h("select", { onchange: (e) => { st.synth = e.target.value; } });
@@ -423,7 +490,8 @@ function renderSetupPanel() {
     h("div", { class: "sec" },
       h("div", { class: "row", style: "margin-bottom:8px" }, h("h3", { class: "grow", style: "margin:0" }, `参会者（已选 ${chosen().length} 位，2~8 位）`),
         h("button", { class: "btn small", onclick: applyFreeLineup }, "一键免费阵容")),
-      seatsBox),
+      seatsBox,
+      h("div", { class: "hint", style: "margin-top:6px" }, "每行：模型 · 角色。没选角色的是中立专家；点 ＋ 可让同一家再坐一席。")),
     h("div", { class: "sec" }, h("h3", {}, "轮次"),
       h("label", { class: "row", style: "cursor:pointer" }, h("input", { type: "checkbox", checked: st.blind, onchange: (e) => { st.blind = e.target.checked; } }), "盲写首轮（各方互相看不到）"),
       h("div", { class: "row", style: "margin-top:6px" }, "交叉辩论",
@@ -435,7 +503,10 @@ function renderSetupPanel() {
         h("div", { class: "grow" }, h("label", { class: "lbl" }, "max_tokens（200~8000）"),
           h("input", { type: "number", min: 200, max: 8000, step: 100, value: st.maxTokens, oninput: (e) => { st.maxTokens = +e.target.value; validateSetup(); } })),
         h("div", { class: "grow" }, h("label", { class: "lbl" }, "temperature（0~2）"),
-          h("input", { type: "number", min: 0, max: 2, step: 0.1, value: st.temperature, oninput: (e) => { st.temperature = +e.target.value; validateSetup(); } })))),
+          h("input", { type: "number", min: 0, max: 2, step: 0.1, value: st.temperature, oninput: (e) => { st.temperature = +e.target.value; validateSetup(); } })),
+        h("div", { class: "grow" }, h("label", { class: "lbl" }, "失败重试次数（0~5）"),
+          h("input", { type: "number", min: 0, max: 5, step: 1, value: st.retries, oninput: (e) => { st.retries = Math.max(0, Math.min(5, +e.target.value || 0)); } }))),
+      h("div", { class: "hint", style: "margin-top:6px" }, "某位参会者限流或出错时，最多重试这么多次；仍失败就跳过，轮到下一位。")),
     h("div", { class: "warn", id: "cost-warn", style: "display:none" }, "本次辩论将产生 API 费用（走你自己的账户）。"));
   validateSetup();
 }
@@ -463,8 +534,8 @@ function applyFreeLineup() {
   if (picks.length < 2) {
     // 只有一家免费 key：同一家再坐一席，换个角色，凑够两方
     const first = st.seats.find((x) => x.provider === picks[0]);
-    first.role = first.role || "正方：支持派";
-    st.seats.splice(st.seats.indexOf(first) + 1, 0, { provider: first.provider, model: first.model, role: "反方：质疑派", on: true, auto: first.auto });
+    first.role = first.role || ROLES[1][0];
+    st.seats.splice(st.seats.indexOf(first) + 1, 0, { provider: first.provider, model: first.model, role: ROLES[2][0], on: true, auto: first.auto });
     toast(`只配置了 ${providerName(picks[0])} 一家免费 key，已让它以正反两个角色参会`);
   }
   renderSetupPanel();
@@ -478,7 +549,7 @@ async function startDebate() {
     participants: chosen().map((s) => ({ provider: s.provider, model: s.model.trim(), role: s.role.trim() })),
     blind_round: st.blind, debate_rounds: st.rounds,
     synthesis: sp ? { provider: sp, model: sm } : null,
-    max_tokens: st.maxTokens, temperature: st.temperature,
+    max_tokens: st.maxTokens, temperature: st.temperature, max_retries: st.retries,
   };
   $("#btn-start").disabled = true;
   try {
@@ -534,7 +605,7 @@ function msgEl(m, r) {
     h("div", { class: "avatar", style: `background:${colorOf(m.participant)}` }, providerName(m.provider).slice(0, 1)),
     h("div", { class: "msg-main" },
       h("div", { class: "msg-head" }, h("span", { class: "who" }, seatLabel({ provider: m.provider, id: m.participant })),
-        h("span", { class: "meta" }, `${m.model} · ${m.role || p.role || DEFAULT_ROLE}`),
+        h("span", { class: "meta", title: m.role || "中立客观的专家" }, `${m.model} · ${roleShort(m.role || "")}`),
         h("span", { class: `dot ${m.status}` }), h("span", { class: "meta" }, st)),
       body,
       m.usage ? h("div", { class: "msg-foot" }, renderUsage(m.usage)) : null));
@@ -581,7 +652,7 @@ function renderComposer() {
   const ta = h("textarea", { rows: 2, placeholder: "补充新的内容或问题（可选），然后让它们接着辩…", value: cur.followup,
     oninput: (e) => { cur.followup = e.target.value; },
     onkeydown: (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) continueDebate(); } });
-  const edits = Object.keys(cur.edits).length + (cur.synthEdit ? 1 : 0);
+  const edits = Object.keys(cur.edits).length + (cur.synthEdit ? 1 : 0) + (cur.retriesEdit != null ? 1 : 0);
   wrap.append(h("div", { class: "composer" }, ta,
     h("div", { class: "composer-bar" },
       h("span", {}, "再辩"),
@@ -598,6 +669,7 @@ function editsPayload() {
   const ps = Object.entries(cur.edits).map(([id, e]) => ({ id, ...e }));
   if (ps.length) body.participants = ps;
   if (cur.synthEdit) { const [provider, model] = cur.synthEdit.split("|"); body.synthesis = { provider, model }; }
+  if (cur.retriesEdit != null) body.max_retries = cur.retriesEdit;
   return body;
 }
 function continueDebate() {
@@ -608,7 +680,7 @@ async function resume(extraBody) {
   const cur = S.cur;
   try {
     await api("POST", `/api/debates/${cur.id}/resume`, { ...editsPayload(), ...extraBody });
-    cur.followup = ""; cur.edits = {}; cur.synthEdit = null; cur.reportIdx = null; S.tab = "report";
+    cur.followup = ""; cur.edits = {}; cur.synthEdit = null; cur.retriesEdit = null; cur.reportIdx = null; S.tab = "report";
     await refreshCurrent(true);
     loadHistory();
   } catch (e) { toast(e.message); }
@@ -617,7 +689,7 @@ async function resynthesize() {
   const cur = S.cur;
   try {
     // 综合者改过的话先保存（resume 不追加轮次时只会重试失败/重新综合，这里用 synthesize 接口更直接）
-    if (cur.synthEdit || Object.keys(cur.edits).length) { await resume({}); return; }
+    if (cur.synthEdit || cur.retriesEdit != null || Object.keys(cur.edits).length) { await resume({}); return; }
     await api("POST", `/api/debates/${cur.id}/synthesize`);
     await refreshCurrent(true);
   } catch (e) { toast(e.message); }
@@ -675,7 +747,7 @@ function renderReportTab(body) {
 }
 function renderPeopleTab(body) {
   const cur = S.cur, d = cur.d, cfg = d.config, u = d.usage || {};
-  const list = h("div", {});
+  const list = h("div", { class: "seats" });
   cfg.participants.forEach((p) => {
     const e = cur.edits[p.id] || {};
     const set = (field, val) => {
@@ -683,16 +755,13 @@ function renderPeopleTab(body) {
       const ed = cur.edits[p.id] = { ...(cur.edits[p.id] || {}) };
       if (val.trim() === orig) delete ed[field]; else ed[field] = val;
       if (!Object.keys(ed).length) delete cur.edits[p.id];
-      renderComposer();
+      renderComposer(); renderRight();
     };
-    list.append(h("div", { class: "seat" },
-      h("div", { class: "seat-top" }, h("span", { class: "avatar", style: `background:${colorOf(p.id)};width:22px;height:22px;font-size:11px` }, providerName(p.provider).slice(0, 1)),
-        h("span", { class: "name" }, seatLabel(p)), keyOk(byId(p.provider)) ? null : h("span", { class: "badge fail" }, "key 未配置")),
-      h("div", { class: "seat-fields" },
-        h("input", { type: "text", list: datalistFor(p.provider), value: e.model ?? p.model, placeholder: "模型名", "aria-label": "模型", disabled: d.active,
-          oninput: (ev) => set("model", ev.target.value) }),
-        h("input", { type: "text", value: e.role ?? p.role, placeholder: `角色（留空=${DEFAULT_ROLE}）`, "aria-label": "角色", disabled: d.active,
-          oninput: (ev) => set("role", ev.target.value) }))));
+    list.append(h("div", { class: "seat people" },
+      h("span", { class: "avatar", style: `background:${colorOf(p.id)};width:20px;height:20px;font-size:11px;border-radius:6px` }, providerName(p.provider).slice(0, 1)),
+      h("span", { class: "name", title: keyOk(byId(p.provider)) ? "" : "key 未配置" }, seatLabel(p) + (keyOk(byId(p.provider)) ? "" : " ⚠")),
+      modelSelect(p.provider, e.model ?? p.model, (v) => set("model", v), d.active),
+      roleSelect(e.role ?? p.role, (v) => set("role", v), d.active)));
   });
   const synthSel = h("select", { disabled: d.active, onchange: (ev) => {
     const orig = `${cfg.synthesis.provider}|${cfg.synthesis.model}`;
@@ -705,6 +774,11 @@ function renderPeopleTab(body) {
     h("div", { class: "sec" }, h("h3", {}, "参会者"), list,
       h("div", { class: "hint" }, d.active ? "辩论进行中，结束后可以改模型和角色。" : "改动在下次“继续辩论”、“重试失败的发言”或“重新综合”时生效。")),
     h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
+    h("div", { class: "sec" }, h("h3", {}, "失败重试次数"),
+      h("div", { class: "row" }, h("input", { type: "number", class: "num", min: 0, max: 5, disabled: d.active,
+        value: cur.retriesEdit ?? (cfg.max_retries ?? 2),
+        oninput: (ev) => { const v = Math.max(0, Math.min(5, +ev.target.value || 0)); cur.retriesEdit = v === (cfg.max_retries ?? 2) ? null : v; renderComposer(); } }),
+        h("span", { class: "hint" }, "次；仍失败就跳过，轮到下一位"))),
     h("div", { class: "sec" }, h("h3", {}, "这场辩论"),
       h("div", { class: "hint" }, `${fmtTime(d.created_at)} · ${STATUS_TEXT[d.status] || d.status}`),
       h("div", { class: "hint" }, `${cfg.blind_round ? "盲写首轮" : "公开首轮"} · 已辩 ${Math.max(0, d.rounds.length - 1)} 轮交叉辩论 · max_tokens ${cfg.max_tokens} · temperature ${cfg.temperature}`),

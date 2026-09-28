@@ -19,7 +19,8 @@ MIN_PARTICIPANTS, MAX_PARTICIPANTS = 2, 8
 MAX_DEBATE_ROUNDS = 5
 QUOTE_LIMIT = 3000      # 交叉轮引用他人发言时每段最多字符数，控制 token（免费档常按分钟限 token）
 REPORT_LIMIT = 2000     # 续辩时附带的上一次综合报告最多字符数
-MAX_EXTRA_ROUNDS = 10   # 单次续辩最多追加的轮数；总轮数不设上限
+MAX_EXTRA_ROUNDS = 10
+MAX_RETRIES = 5         # 每次发言最多重试次数的上限（默认见 providers.DEFAULT_RETRIES）   # 单次续辩最多追加的轮数；总轮数不设上限
 DEFAULT_ROLE = "中立客观的专家"
 TERMINAL_EVENTS = ("debate_done", "debate_cancelled")
 
@@ -198,6 +199,7 @@ def validate(body: dict) -> dict:
     rounds = _num(body.get("debate_rounds"), int, "交叉辩论轮数", 0, MAX_DEBATE_ROUNDS, 2)
     max_tokens = _num(body.get("max_tokens"), int, "max_tokens", 200, 8000, 1500)
     temperature = _num(body.get("temperature"), float, "temperature", 0.0, 2.0, 0.7)
+    max_retries = _num(body.get("max_retries"), int, "重试次数", 0, MAX_RETRIES, providers.DEFAULT_RETRIES)
 
     syn = body.get("synthesis") or {}
     if not isinstance(syn, dict) or not syn.get("provider"):
@@ -221,6 +223,7 @@ def validate(body: dict) -> dict:
             "synthesis": {"provider": spid, "model": smodel},
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "max_retries": max_retries,
         },
     }
 
@@ -338,6 +341,8 @@ class DebateManager:
                 p["model"] = str(ch["model"]).strip() or providers.default_model(p["provider"])
             if ch.get("role") is not None:
                 p["role"] = str(ch["role"]).strip()
+        if body.get("max_retries") is not None:
+            cfg["max_retries"] = _num(body.get("max_retries"), int, "重试次数", 0, MAX_RETRIES, providers.DEFAULT_RETRIES)
         syn = body.get("synthesis")
         if isinstance(syn, dict) and syn.get("provider"):
             try:
@@ -393,7 +398,8 @@ class DebateManager:
 
         try:
             res = providers.chat(msg["provider"], msg["model"], system, user,
-                                 cfg["max_tokens"], cfg["temperature"], True, on_token, on_retry)
+                                 cfg["max_tokens"], cfg["temperature"], True, on_token, on_retry,
+                                 max_retries=cfg.get("max_retries"))
             text = (res.get("text") or "").strip()
             if not text:
                 raise ProviderError("模型返回了空内容")
@@ -500,7 +506,8 @@ class DebateManager:
                 # TODO(规格待确认)：规格只说用指定综合者；免费档常 503/429，这里自动换参会者里的其他模型
                 run.emit("synthesis_retry", {"note": f"{errors[-1]}；改由 {by} 综合", "by": by})
             try:
-                res = providers.chat(pid, model, SYNTH_SYSTEM, user, max_tokens, temperature, True, on_token, on_retry)
+                res = providers.chat(pid, model, SYNTH_SYSTEM, user, max_tokens, temperature, True, on_token, on_retry,
+                                     max_retries=d["config"].get("max_retries"))
                 text = (res.get("text") or "").strip()
                 if not text:
                     raise ProviderError("综合者返回了空内容")

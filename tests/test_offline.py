@@ -249,7 +249,10 @@ class OfflineE2E(unittest.TestCase):
     def test_07_rate_limit_retry_then_fail(self):
         with self.assertRaises(providers.ProviderError) as cm:
             providers.chat("groq", "always-429", "s", "u", 200, 0.5, False)
-        self.assertIn("已重试 3 次", cm.exception.msg)
+        self.assertIn("已重试 2 次", cm.exception.msg)  # 默认重试 2 次
+        with self.assertRaises(providers.ProviderError) as cm:
+            providers.chat("groq", "always-429", "s", "u", 200, 0.5, False, max_retries=0)
+        self.assertIn("已重试 0 次", cm.exception.msg)
         notes = []
         r = providers.chat("groq", "fail-once-a", "s", "u", 200, 0.5, False, on_retry=notes.append)
         self.assertIn("我的观点", r["text"])

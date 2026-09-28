@@ -25,7 +25,8 @@ from . import store
 log = logging.getLogger("ai-council.providers")
 
 CONNECT_TIMEOUT = 10
-BACKOFF = (2, 8, 20)  # 429/5xx 没有等待提示时的退避秒数；长度即最多重试次数
+BACKOFF = (2, 8, 20)  # 429/5xx 没有等待提示时的退避秒数（第 n 次重试用第 n 个，超出用最后一个）
+DEFAULT_RETRIES = 2   # 每次发言遇到限流/过载/网络错误时最多重试几次，辩论里可在高级参数中调
 MAX_WAIT = 65         # 单次最多等多久；超过（如每日额度用完）就不等了
 READ_TIMEOUT = 120
 APP_NAME = "AI Council"
@@ -603,10 +604,11 @@ _CHAT_BY_KIND = {"openai": _chat_openai, "gemini": _chat_gemini, "anthropic": _c
 
 def chat(provider_id: str, model: str, system: str, user: str,
          max_tokens: int, temperature: float, stream: bool,
-         on_token=None, on_retry=None) -> dict:
+         on_token=None, on_retry=None, max_retries: int | None = None) -> dict:
     """返回 {"text": str, "usage": {"prompt_tokens": int, "completion_tokens": int} | None}
 
     on_retry(msg)：发生重试前回调（流式输出已发出的内容需要前端清空重来）。
+    max_retries：限流/过载/网络错误最多重试几次（默认 DEFAULT_RETRIES）；仍失败就抛错，由调用方交给下一位。
     """
     p = get_provider(provider_id)
     key = key_for(provider_id)
@@ -615,37 +617,36 @@ def chat(provider_id: str, model: str, system: str, user: str,
     model = (model or "").strip() or default_model(provider_id)
     fn = _CHAT_BY_KIND[p["kind"]]
 
-    # TODO(规格待确认)：规格写 429 退避 1s、4s 最多 2 次。免费档实测经常要等 30s 左右（Groq 按分钟算 token），
-    # 所以改为：优先按服务端提示的时间等；没提示就 2s、8s、20s；503 过载同样处理。单次最多等 MAX_WAIT 秒。
-    busy_retries, net_retries = 0, 0
+    # TODO(规格待确认)：规格写 429 退避 1s、4s 最多 2 次。这里优先按服务端提示的时间等（免费档常要 30s 左右），
+    # 没提示就按 BACKOFF 退避；重试次数由 max_retries 控制（默认 2），单次最多等 MAX_WAIT 秒。
+    limit = DEFAULT_RETRIES if max_retries is None else max(0, int(max_retries))
+    tries = 0
     while True:
         try:
             return fn(p, model, system, user, int(max_tokens), float(temperature), stream, on_token, key)
         except ProviderError as e:
             busy = e.status == 429 or (e.status is not None and e.status >= 500)
-            if busy and busy_retries < len(BACKOFF):
-                wait = e.retry_after if e.retry_after is not None else BACKOFF[busy_retries]
-                if wait > MAX_WAIT:
-                    # 例如每日额度用完，要等几小时：不空等，直接失败
-                    e.msg = f"{e.msg}（需要等待约 {int(wait)} 秒，超过上限，放弃重试）"
-                    raise
+            net = e.status is None and e.retryable
+            if (busy or net) and tries < limit:
+                if busy:
+                    wait = e.retry_after if e.retry_after is not None else BACKOFF[min(tries, len(BACKOFF) - 1)]
+                    if wait > MAX_WAIT:
+                        # 例如每日额度用完，要等几小时：不空等，直接失败
+                        e.msg = f"{e.msg}（需要等待约 {int(wait)} 秒，超过上限，放弃重试）"
+                        raise
+                    what = "限流" if e.status == 429 else "服务繁忙"
+                    note = f"{e.status} {what}"
+                else:
+                    wait, note = 1, "网络错误或超时"
                 wait = max(wait, 0.5)
-                busy_retries += 1
-                what = "限流" if e.status == 429 else "服务繁忙"
-                log.info("%s/%s %s %s，%.0fs 后第 %s 次重试", provider_id, model, e.status, what, wait, busy_retries)
+                tries += 1
+                log.info("%s/%s %s，%.0fs 后第 %s 次重试", provider_id, model, note, wait, tries)
                 if on_retry:
-                    on_retry(f"{e.status} {what}，{wait:.0f} 秒后重试（第 {busy_retries} 次）")
+                    on_retry(f"{note}，{wait:.0f} 秒后重试（第 {tries}/{limit} 次）")
                 time.sleep(wait)
                 continue
-            if e.status is None and e.retryable and net_retries < 1:
-                net_retries += 1
-                log.info("%s/%s 网络错误，重试一次：%s", provider_id, model, e.msg)
-                if on_retry:
-                    on_retry("网络错误或超时，重试 1 次")
-                time.sleep(1)
-                continue
-            if busy:
-                e.msg = f"{e.msg}（已重试 {busy_retries} 次）"
+            if busy or net:
+                e.msg = f"{e.msg}（已重试 {tries} 次）"
             raise
 
 
