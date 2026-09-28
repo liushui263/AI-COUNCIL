@@ -84,7 +84,6 @@ a { color: var(--accent); }
 .round-sep { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 22px 0 10px; }
 .round-sep::before, .round-sep::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
 .msg { display: flex; gap: 10px; margin: 12px 0; }
-.avatar { width: 30px; height: 30px; border-radius: 8px; flex: none; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; }
 .msg-main { flex: 1; min-width: 0; }
 .msg-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .msg-head .who { font-weight: 600; }
@@ -111,9 +110,23 @@ a { color: var(--accent); }
 .sec h3 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 8px; }
 /* 参会者：一人一行（勾选 · 名称 · 模型 · 角色 · 加减） */
 .seats { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-.seat { display: grid; grid-template-columns: 20px 92px minmax(0, 1.5fr) minmax(0, 1fr) auto; gap: 6px; align-items: center;
+.seat { display: grid; grid-template-columns: 18px 24px 104px minmax(0, 1fr) 46px; gap: 6px; align-items: center;
   padding: 5px 8px; border-top: 1px solid var(--border); background: var(--panel); }
-.seat.people { grid-template-columns: 22px 88px minmax(0, 1.5fr) minmax(0, 1fr) 26px; }
+.seat.people { grid-template-columns: 24px 104px minmax(0, 1fr) 26px; }
+.seat .pname { font-weight: 600; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 模型自带图标（内置 SVG，简化版） */
+.picon { width: 24px; height: 24px; flex: none; display: inline-block; border-radius: 6px; overflow: hidden; }
+.picon svg { width: 100%; height: 100%; display: block; }
+.picon.big { width: 30px; height: 30px; border-radius: 8px; }
+/* 角色名：按角色上色、换字体，本身就是下拉菜单 */
+.rolename { border: 1px solid transparent; background: transparent; font-size: 15px; padding: 2px 2px; border-radius: 6px;
+  cursor: pointer; min-width: 0; max-width: 100%; appearance: auto; }
+.rolename:hover:not(:disabled) { border-color: var(--border); background: var(--code-bg); }
+.rolename:disabled { cursor: default; opacity: 1; }
+.rolename option { color: var(--text); font-style: normal; font-weight: 400; font-family: inherit; }
+.rolechip { font-size: 14px; }
+.addrow { display: flex; gap: 8px; align-items: center; margin-top: 6px; flex-wrap: wrap; }
+.addrow select { flex: 1; min-width: 0; }
 .seat.added { background: var(--accent-soft); }
 .seat:first-child { border-top: 0; }
 .seat.off .sel { opacity: .5; }
@@ -122,7 +135,7 @@ a { color: var(--accent); }
 .seat .acts { display: flex; gap: 2px; }
 .seat .acts button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 2px 5px; border-radius: 6px; }
 .seat .acts button:hover { background: var(--code-bg); color: var(--text); }
-.seat .nokey { grid-column: 3 / 5; font-size: 13px; }
+.seat .nokey { grid-column: 4 / 6; font-size: 13px; }
 
 /* ---------- 通用控件 ---------- */
 input[type=text], input[type=password], input[type=number], textarea.box, select {
@@ -363,7 +376,6 @@ function md(src) {
 
 
 // ============================================================ 状态
-const COLORS = ["#c2410c", "#2563eb", "#15803d", "#7c3aed", "#db2777", "#0891b2", "#a16207", "#475569"];
 let PROVIDERS = [];
 let HISTORY = [];
 const byId = (id) => PROVIDERS.find((p) => p.id === id);
@@ -444,11 +456,49 @@ const ROLES = [
   ["魔鬼代言人，故意唱反调、挑出所有漏洞", "挑刺"],
 ];
 function roleShort(v) { const r = ROLES.find((x) => x[0] === v); return r ? r[1].replace("（默认）", "") : (v || "中立"); }
+// 每个角色一种颜色和字体
+const SERIF = '"Songti SC", "STSong", "SimSun", serif', KAI = '"Kaiti SC", "STKaiti", "KaiTi", serif';
+const ROLE_STYLE = {
+  "中立": { color: "#2563eb", weight: 600 },
+  "支持": { color: "#16a34a", weight: 700 },
+  "反对": { color: "#dc2626", weight: 700 },
+  "财务": { color: "#b45309", weight: 600, font: SERIF },
+  "开发": { color: "#7c3aed", weight: 600, font: 'ui-monospace, "Cascadia Mono", Consolas, monospace' },
+  "风险": { color: "#ea580c", weight: 700, italic: true },
+  "体验": { color: "#db2777", weight: 600, font: KAI },
+  "执行": { color: "#0d9488", weight: 700 },
+  "挑刺": { color: "#57534e", weight: 700, italic: true, font: KAI },
+};
+function roleCss(v) {
+  const st = ROLE_STYLE[roleShort(v || "")] || { color: "#475569", weight: 600, italic: true };
+  return `color:${st.color};font-weight:${st.weight};${st.italic ? "font-style:italic;" : ""}${st.font ? `font-family:${st.font};` : ""}`;
+}
+function roleChip(v) { return h("span", { class: "rolechip", style: roleCss(v), title: v || "中立客观的专家" }, roleShort(v || "")); }
+// 新加一位时，自动选第一个还没人用的角色
+function nextRole(used) { const u = new Set(used.map((x) => x || "")); const r = ROLES.find(([v]) => !u.has(v)); return r ? r[0] : ""; }
+
+// 各家图标：内置的简化版 SVG（不从外网加载）
+const ICONS = {
+  gemini: '<svg viewBox="0 0 24 24"><defs><linearGradient id="gg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f8cff"/><stop offset=".6" stop-color="#9168f0"/><stop offset="1" stop-color="#d6645d"/></linearGradient></defs><rect width="24" height="24" fill="#eef3ff"/><path d="M12 3c.5 4.8 4.2 8.5 9 9-4.8.5-8.5 4.2-9 9-.5-4.8-4.2-8.5-9-9 4.8-.5 8.5-4.2 9-9z" fill="url(#gg)"/></svg>',
+  groq: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#f55036"/><circle cx="12" cy="10.2" r="4.3" fill="none" stroke="#fff" stroke-width="2.3"/><path d="M16.3 10.2v4.4a4.3 4.3 0 0 1-7.4 3" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round"/></svg>',
+  openrouter: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#6566f1"/><path d="M3.5 12h4.5c2.2 0 3-1 4.5-2.6S15 6.5 17 6.5h2.5M8 12c2.2 0 3 1 4.5 2.6s2.5 2.9 4.5 2.9h2.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"/><path d="M17.5 4.3l2.6 2.2-2.6 2.2M17.5 15.3l2.6 2.2-2.6 2.2" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  pollinations: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#111"/><g fill="#fff"><circle cx="12" cy="7" r="3"/><circle cx="16.8" cy="10.5" r="3"/><circle cx="15" cy="16" r="3"/><circle cx="9" cy="16" r="3"/><circle cx="7.2" cy="10.5" r="3"/></g><circle cx="12" cy="12" r="2.4" fill="#f5c542"/></svg>',
+  deepseek: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#4d6bfe"/><path d="M4 12.5c0-3.6 3.3-6 7.2-6 3.4 0 5.6 1.7 6.6 3.8l2.4-1.6-.6 3.6.9 2.6-2.8-1.1c-.9 3.2-3.8 5.2-7.3 5.2C6.6 19 4 16.2 4 12.5z" fill="#fff"/><circle cx="8.6" cy="11" r="1" fill="#4d6bfe"/></svg>',
+  openai: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#10a37f"/><g fill="none" stroke="#fff" stroke-width="1.7"><rect x="8.6" y="4.2" width="6.8" height="10.4" rx="3.4"/><rect x="8.6" y="4.2" width="6.8" height="10.4" rx="3.4" transform="rotate(120 12 12)"/><rect x="8.6" y="4.2" width="6.8" height="10.4" rx="3.4" transform="rotate(240 12 12)"/></g></svg>',
+  anthropic: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#d97757"/><g stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M12 4v16M4 12h16M6.3 6.3l11.4 11.4M17.7 6.3 6.3 17.7"/></g><circle cx="12" cy="12" r="2" fill="#d97757"/></svg>',
+  xai: '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#000"/><path d="M5.5 6h3.2l9.8 12h-3.2zM16.5 6h2.3l-5.6 6.9-1.2-1.5zM10.3 14.3l1.2 1.5L9.2 18.6H6.9z" fill="#fff"/></svg>',
+};
+function providerIcon(pid, big) {
+  const el = h("span", { class: "picon" + (big ? " big" : ""), title: providerName(pid) });
+  el.innerHTML = ICONS[pid] || `<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#64748b"/><text x="12" y="16.5" font-size="12" text-anchor="middle" fill="#fff">${esc(providerName(pid).slice(0, 1))}</text></svg>`;
+  return el;
+}
+// 角色下拉就是名字：按角色上色
 function roleSelect(value, onchange, disabled) {
-  const sel = h("select", { class: "sel", "aria-label": "角色", disabled, title: value || "中立客观的专家" });
+  const sel = h("select", { class: "rolename", "aria-label": "角色", disabled, title: (value || "中立客观的专家") + (disabled ? "" : "（点击换角色）"), style: roleCss(value) });
   const known = ROLES.some((r) => r[0] === (value || ""));
-  ROLES.forEach(([v, label]) => sel.append(h("option", { value: v }, label)));
-  if (!known) sel.append(h("option", { value }, `自定义：${value.slice(0, 12)}`));
+  ROLES.forEach(([v, label]) => sel.append(h("option", { value: v }, label.replace("（默认）", ""))));
+  if (!known) sel.append(h("option", { value }, value.length > 8 ? value.slice(0, 8) + "…" : value));
   sel.append(h("option", { value: "__custom" }, "自定义…"));
   sel.value = value || "";
   sel.onchange = () => {
@@ -542,15 +592,16 @@ function renderSetupPanel() {
     const dup = st.seats.slice(0, idx).filter((x) => x.provider === s.provider).length;
     const ok = keyOk(p);
     const acts = h("div", { class: "acts" },
-      ok ? h("button", { title: "同一家再加一个席位（例如换个角色）", onclick: () => { st.seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: "", on: true, auto: s.auto }); renderSetupPanel(); } }, "＋") : null,
+      ok ? h("button", { title: "同一家再加一位（自动选一个还没人用的角色）", onclick: () => {
+        st.seats.splice(idx + 1, 0, { provider: s.provider, model: s.model, role: nextRole(st.seats.filter((x) => x.on).map((x) => x.role)), on: true, auto: s.auto });
+        renderSetupPanel(); } }, "＋") : null,
       dup ? h("button", { title: "移除这个席位", onclick: () => { st.seats.splice(idx, 1); renderSetupPanel(); } }, "✕") : null);
     seatsBox.append(h("div", { class: "seat" + (s.on ? "" : " off") },
       h("input", { type: "checkbox", checked: s.on, disabled: !ok, "aria-label": `选择 ${p.name}`, onchange: (e) => { s.on = e.target.checked; renderSetupPanel(); } }),
-      h("span", { class: "name", title: p.free_tier_desc }, p.name + (dup ? ` #${dup + 1}` : "")),
+      providerIcon(p.id),
+      ok ? roleSelect(s.role, (v) => { s.role = v; s.on = true; renderSetupPanel(); }) : h("span", { class: "pname", title: p.free_tier_desc }, p.name),
       ok ? modelSelect(p.id, s.model, (v) => { s.model = v; s.auto = false; s.on = true; renderSetupPanel(); }) : null,
-      ok ? roleSelect(s.role, (v) => { s.role = v; s.on = true; renderSetupPanel(); }) : null,
-      ok ? acts : h("a", { href: "#", class: "nokey hint", onclick: (e) => { e.preventDefault(); showSettings(); } }, p.free ? "免费 · 去配置 key" : "付费 · 去配置 key"),
-      ok ? null : h("span", {})));
+      ok ? acts : h("a", { href: "#", class: "nokey hint", onclick: (e) => { e.preventDefault(); showSettings(); } }, p.free ? "免费 · 去配置 key" : "付费 · 去配置 key")));
   });
 
   const synthSel = h("select", { onchange: (e) => { st.synth = e.target.value; } });
@@ -568,7 +619,7 @@ function renderSetupPanel() {
       h("div", { class: "row", style: "margin-bottom:8px" }, h("h3", { class: "grow", style: "margin:0" }, `参会者（已选 ${chosen().length} 位，2~8 位）`),
         h("button", { class: "btn small", onclick: applyFreeLineup }, "一键免费阵容")),
       seatsBox,
-      h("div", { class: "hint", style: "margin-top:6px" }, "每行：模型 · 角色。没选角色的是中立专家；点 ＋ 可让同一家再坐一席。")),
+      h("div", { class: "hint", style: "margin-top:6px" }, "每行：图标是哪家模型，彩色的名字就是角色（点它可以换）。点 ＋ 同一家再加一位，自动选还没人用的角色。")),
     h("div", { class: "sec" }, h("h3", {}, "轮次"),
       h("label", { class: "row", style: "cursor:pointer" }, h("input", { type: "checkbox", checked: st.blind, onchange: (e) => { st.blind = e.target.checked; } }), "盲写首轮（各方互相看不到）"),
       h("div", { class: "row", style: "margin-top:6px" }, "交叉辩论",
@@ -658,10 +709,6 @@ function reportsOf(d) {
   if (d.syntheses && d.syntheses.length) return d.syntheses;
   return d.synthesis && d.synthesis.status === "ok" ? [d.synthesis] : [];
 }
-function colorOf(pid) {
-  const i = S.cur.d.config.participants.findIndex((p) => p.id === pid);
-  return COLORS[(i < 0 ? 0 : i) % COLORS.length];
-}
 function inputBefore(d, idx) { return (d.inputs || []).find((x) => x.before_round === idx) || null; }
 function roundTitle(d, idx) { return idx === 0 ? (d.config.blind_round ? "第 0 轮 · 盲写" : "第 0 轮 · 公开首轮") : `第 ${idx} 轮 · 交叉辩论`; }
 function renderAll() { renderLeft(); renderMidHead(); renderMidBody(); renderComposer(); renderRight(); }
@@ -679,10 +726,10 @@ function msgEl(m, r) {
   else body.append(h("span", { class: "hint" }, "等待发言"));
   const st = m.status === "running" && m.note ? noteSpan("meta", m.note, m.retryAt) : h("span", { class: "meta" }, MSG_STATUS[m.status] || m.status);
   return h("div", { class: "msg", id: `m-${r}-${m.participant}` },
-    h("div", { class: "avatar", style: `background:${colorOf(m.participant)}` }, providerName(m.provider).slice(0, 1)),
+    providerIcon(m.provider, true),
     h("div", { class: "msg-main" },
-      h("div", { class: "msg-head" }, h("span", { class: "who" }, seatLabel({ provider: m.provider, id: m.participant })),
-        h("span", { class: "meta", title: m.role || "中立客观的专家" }, `${m.model} · ${roleShort(m.role || "")}`),
+      h("div", { class: "msg-head" }, h("span", { class: "who" }, roleChip(m.role || "")),
+        h("span", { class: "meta" }, `${seatLabel({ provider: m.provider, id: m.participant })} · ${m.model}`),
         h("span", { class: `dot ${m.status}` }), st),
       body,
       m.usage ? h("div", { class: "msg-foot" }, renderUsage(m.usage)) : null));
@@ -843,30 +890,33 @@ function renderPeopleTab(body) {
       if (!Object.keys(ed).length) delete cur.edits[p.id];
       renderComposer(); renderRight();
     };
-    list.append(h("div", { class: "seat people" },
-      h("span", { class: "avatar", style: `background:${colorOf(p.id)};width:20px;height:20px;font-size:11px;border-radius:6px` }, providerName(p.provider).slice(0, 1)),
-      h("span", { class: "name", title: keyOk(byId(p.provider)) ? "" : "key 未配置" }, seatLabel(p) + (keyOk(byId(p.provider)) ? "" : " ⚠")),
-      modelSelect(p.provider, e.model ?? p.model, (v) => set("model", v), d.active),
+    list.append(h("div", { class: "seat people", title: keyOk(byId(p.provider)) ? "" : `${providerName(p.provider)} 的 key 未配置` },
+      providerIcon(p.provider),
       roleSelect(e.role ?? p.role, (v) => set("role", v), d.active),
-      h("span", { class: "acts" }, !d.active && keyOk(byId(p.provider))
-        ? h("button", { title: "再加一位参会者（同一家，可换模型或角色），从下一轮开始发言",
+      modelSelect(p.provider, e.model ?? p.model, (v) => set("model", v), d.active),
+      h("span", { class: "acts" }, !d.active
+        ? h("button", { title: "同一家再加一位（自动选还没人用的角色），从下一轮开始发言",
             onclick: () => addSeat(p.provider, e.model ?? p.model) }, "＋") : null)));
   });
   // 待加入的参会者：续辩时从下一轮开始发言
   cur.adds.forEach((a, i) => {
     const redraw = () => { renderComposer(); renderRight(); };
-    list.append(h("div", { class: "seat people added" },
-      h("span", { class: "avatar", style: "background:var(--muted);width:20px;height:20px;font-size:11px;border-radius:6px" }, providerName(a.provider).slice(0, 1)),
-      h("span", { class: "name", title: "新加入，从下一轮开始发言" }, `${providerName(a.provider)}（新）`),
-      modelSelect(a.provider, a.model, (v) => { a.model = v; redraw(); }, false),
+    const ok = keyOk(byId(a.provider));
+    list.append(h("div", { class: "seat people added", title: "新加入，从下一轮开始发言" },
+      providerIcon(a.provider),
       roleSelect(a.role, (v) => { a.role = v; redraw(); }, false),
+      ok ? modelSelect(a.provider, a.model, (v) => { a.model = v; redraw(); }, false)
+        : h("a", { href: "#", class: "hint", onclick: (ev) => { ev.preventDefault(); showSettings(); } }, `${a.model} · 去配置 ${providerName(a.provider)} 的 key`),
       h("span", { class: "acts" }, h("button", { title: "不加了", onclick: () => { cur.adds.splice(i, 1); redraw(); } }, "✕"))));
   });
   const total = cfg.participants.length + cur.adds.length;
-  const others = PROVIDERS.filter((x) => keyOk(x));
-  const addSel = !d.active && total < 8 && others.length ? h("select", { class: "sel", style: "margin-top:6px",
-    onchange: (ev) => { if (ev.target.value) addSeat(ev.target.value, ""); } },
-    h("option", { value: "" }, "＋ 添加参会者…"), others.map((x) => h("option", { value: x.id }, x.name))) : null;
+  // 所有 provider 的所有模型都列出来；没配 key 的也能选，选中后那一行会给出配置 key 的链接
+  const addSel = !d.active && total < 8 ? h("select", { class: "sel",
+    onchange: (ev) => { const [pid, ...m] = ev.target.value.split("|"); if (pid) addSeat(pid, m.join("|")); } },
+    h("option", { value: "" }, "＋ 添加参会者：选一个模型…"),
+    PROVIDERS.map((x) => h("optgroup", { label: `${x.name}${keyOk(x) ? "" : "（未配置 key）"}` },
+      [...new Set([x.default_model, ...(x.models || [])].filter(Boolean))].slice(0, 80)
+        .map((m) => h("option", { value: `${x.id}|${m}` }, m + (m === x.default_model ? "（默认）" : "")))))) : null;
   const synthSel = h("select", { disabled: d.active, onchange: (ev) => {
     const orig = `${cfg.synthesis.provider}|${cfg.synthesis.model}`;
     cur.synthEdit = ev.target.value === orig ? null : ev.target.value; renderComposer(); } });
@@ -875,7 +925,7 @@ function renderPeopleTab(body) {
   opts.forEach((v) => synthSel.append(h("option", { value: v }, `${providerName(v.split("|")[0])} / ${v.split("|")[1]}`)));
   synthSel.value = cur.synthEdit || opts[0];
   body.append(
-    h("div", { class: "sec" }, h("h3", {}, "参会者"), list, addSel,
+    h("div", { class: "sec" }, h("h3", {}, "参会者"), list, addSel ? h("div", { class: "addrow" }, addSel) : null,
       h("div", { class: "hint" }, d.active ? "辩论进行中，结束后可以改模型、角色或加人。" : "改动在下次“继续辩论”、“重试失败的发言”或“重新综合”时生效；新加的参会者从下一轮开始发言。")),
     h("div", { class: "sec" }, h("h3", {}, "综合者"), synthSel),
     h("div", { class: "sec" }, h("h3", {}, "失败重试次数"),
@@ -894,7 +944,9 @@ function renderPeopleTab(body) {
 function addSeat(provider, model) {
   const cur = S.cur;
   if (cur.d.config.participants.length + cur.adds.length >= 8) { toast("最多 8 位参会者"); return; }
-  cur.adds.push({ provider, model: model || (byId(provider) || {}).default_model || "", role: "" });
+  const used = cur.d.config.participants.map((p) => (cur.edits[p.id] || {}).role ?? p.role).concat(cur.adds.map((a) => a.role));
+  cur.adds.push({ provider, model: model || (byId(provider) || {}).default_model || "", role: nextRole(used) });
+  if (!keyOk(byId(provider))) toast(`${providerName(provider)} 还没配置 key，配置后才能参会`);
   renderComposer(); renderRight();
 }
 async function deleteDebate() {
