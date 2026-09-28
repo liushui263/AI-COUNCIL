@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import socket
 import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -263,6 +265,9 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.debug("%s - %s", self.address_string(), fmt % args)
 
+    def log_error(self, fmt, *args):
+        log.warning("%s - %s", self.address_string(), fmt % args)
+
     # -- helpers
     def send_json(self, obj, status: int = 200):
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -358,7 +363,24 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # Windows 上 SO_REUSEADDR 允许两个进程同时绑定同一端口（例如上次启动的实例还没退出），
+    # 浏览器的请求可能被另一个进程接走，表现为 ERR_EMPTY_RESPONSE。Windows 改用独占绑定。
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def handle_error(self, request, client_address):
+        log.exception("处理来自 %s 的请求时出错", client_address)
+
+
+def port_in_use(host: str, port: int) -> bool:
+    """端口上是否已有程序在接受连接（上次启动的实例或其他程序）。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8000) -> Server:

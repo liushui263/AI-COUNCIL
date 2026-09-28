@@ -26,14 +26,18 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
 
-    n = store.mark_interrupted_on_startup()
-    if n:
-        logging.info("有 %d 场上次未完成的辩论，已标记为 interrupted", n)
-
+    busy = (f"端口 {args.port} 已被占用：可能是上次启动的 AI 议事厅还没关（先关掉那个窗口），"
+            f"或者有其他程序在用这个端口。也可以换一个端口：python app.py --port 8080")
+    if server.port_in_use(HOST, args.port):
+        sys.exit(busy)
     try:
         httpd = server.make_server(HOST, args.port)
     except OSError as e:
-        sys.exit(f"无法监听 {HOST}:{args.port}（{e}）。端口被占用时可用 --port 换一个端口")
+        sys.exit(f"{busy}\n（{e}）")
+
+    n = store.mark_interrupted_on_startup()
+    if n:
+        logging.info("有 %d 场上次未完成的辩论，已标记为 interrupted", n)
 
     url = f"http://{HOST}:{args.port}"
     print(f"AI 议事厅已启动：{url}  （Ctrl+C 退出）", flush=True)
