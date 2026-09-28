@@ -183,6 +183,12 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg);
   padding: 8px 16px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; max-width: 90vw; }
 .toast.show { opacity: .95; }
+.login { position: fixed; inset: 0; background: var(--bg); display: grid; place-items: center; z-index: 60; padding: 16px; }
+.login form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; display: grid; gap: 10px; }
+.login h2 { margin: 0 0 4px; }
+.login input { width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }
+.me-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 13px; color: var(--muted); }
+.me-row .grow { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -194,7 +200,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
     </div>
     <div class="hist-title">历史</div>
     <div class="hist" id="hist"></div>
-    <div class="left-foot"><button class="nav-btn" id="btn-settings">⚙ 设置（Key 与模型）</button></div>
+    <div class="left-foot"><div id="me-row"></div><button class="nav-btn" id="btn-settings">⚙ 设置（Key 与模型）</button></div>
   </aside>
 
   <main class="mid">
@@ -305,7 +311,9 @@ function exportLinks(id) {
 async function api(method, path, body) {
   const opt = { method, headers: {} };
   if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  if (MODE === "shared") opt.headers["X-AIC-Keys"] = btoa(unescape(encodeURIComponent(JSON.stringify(localKeys()))));
   const res = await fetch(path, opt);
+  if (res.status === 401 && MODE === "shared" && path !== "/api/login") { showLogin(); throw new Error("请先登录"); }
   let data = null;
   try { data = await res.json(); } catch (_) { /* 非 JSON */ }
   if (!res.ok) throw new Error((data && data.error) || `请求失败（HTTP ${res.status}）`);
@@ -379,7 +387,16 @@ function md(src) {
 let PROVIDERS = [];
 let HISTORY = [];
 const byId = (id) => PROVIDERS.find((p) => p.id === id);
-const keyOk = (p) => p && (!p.need_key || p.key_configured);
+// 共享模式（朋友测试）：key 只存在这个浏览器里（按账号分开），每次请求放在 X-AIC-Keys 头里发给本机服务
+let MODE = "local", ME = null;
+const keysSlot = () => `aic.keys.${ME || ""}`;
+function localKeys() { try { return JSON.parse(localStorage.getItem(keysSlot()) || "{}") || {}; } catch (_) { return {}; } }
+function setLocalKey(pid, v) {
+  const k = localKeys(); if (v) k[pid] = v; else delete k[pid];
+  try { localStorage.setItem(keysSlot(), JSON.stringify(k)); } catch (_) { toast("浏览器不允许保存（可能是无痕模式）"); }
+}
+const hasKey = (p) => MODE === "shared" ? !!localKeys()[p.id] : !!p.key_configured;
+const keyOk = (p) => p && (!p.need_key || hasKey(p));
 const S = {
   mode: "new",      // new | debate | settings
   tab: "people",    // 右栏：people | report
@@ -1019,12 +1036,15 @@ async function showSettings() {
 function renderSettings() {
   const box = $("#mid-body"); box.innerHTML = "";
   const col = h("div", { class: "col" });
-  col.append(h("p", { class: "hint", style: "margin-top:0" }, "Key 只保存在本机 .env 文件里，页面永远看不到 key 明文。本应用只会向你选择的 provider 发请求。保存 key 时会自动获取模型列表，并挑一个当前可用的模型作为默认值。"));
+  col.append(h("p", { class: "hint", style: "margin-top:0" }, MODE === "shared"
+    ? `这是 ${ME} 的个人设置，别人看不到。你的 key 只保存在这台电脑的浏览器里，服务器不保存、不记日志；发起辩论时随请求发送，只在辩论进行期间留在服务器内存里。费用和额度都算在你自己的账户上。换电脑或清除浏览器数据后需要重新填。`
+    : "Key 只保存在本机 .env 文件里，页面永远看不到 key 明文。本应用只会向你选择的 provider 发请求。保存 key 时会自动获取模型列表，并挑一个当前可用的模型作为默认值。"));
   PROVIDERS.forEach((p) => {
-    const keyInput = h("input", { type: "password", placeholder: p.key_configured ? "已配置（输入新 key 可替换）" : "粘贴 API key", autocomplete: "off", spellcheck: false });
-    const status = p.key_configured ? h("span", { class: "badge ok" }, "已配置") : p.need_key ? h("span", { class: "badge fail" }, "未配置") : h("span", { class: "badge" }, "无需 key");
+    const has = hasKey(p);
+    const keyInput = h("input", { type: "password", placeholder: has ? "已配置（输入新 key 可替换）" : "粘贴 API key", autocomplete: "off", spellcheck: false });
+    const status = has ? h("span", { class: "badge ok" }, "已配置") : p.need_key ? h("span", { class: "badge fail" }, "未配置") : h("span", { class: "badge" }, "无需 key");
     const modelsInfo = h("span", { class: "hint" }, p.models.length ? `已缓存 ${p.models.length} 个模型（${fmtTime(p.models_updated_at)}），默认 ${p.default_model}` : `尚未获取模型列表，默认 ${p.default_model}`);
-    const refreshBtn = h("button", { class: "btn small", disabled: p.need_key && !p.key_configured, onclick: async () => {
+    const refreshBtn = h("button", { class: "btn small", disabled: p.need_key && !has, onclick: async () => {
       refreshBtn.disabled = true; refreshBtn.textContent = "刷新中…";
       try { const r = await api("POST", `/api/providers/${p.id}/models/refresh`); toast(`${p.name}：获取到 ${r.models.length} 个模型`); await loadProviders(); seatsSyncDefaults(); renderSettings(); }
       catch (e) { toast(e.message); refreshBtn.disabled = false; refreshBtn.textContent = "刷新模型列表"; }
@@ -1035,14 +1055,21 @@ function renderSettings() {
       h("div", { class: "row" }, h("div", { class: "grow" }, keyInput),
         h("button", { class: "btn small primary", onclick: async () => {
           const k = keyInput.value.trim(); if (!k) { toast("请先粘贴 key"); return; }
+          if (MODE === "shared") {
+            setLocalKey(p.id, k); keyInput.value = "";
+            try { const r = await api("POST", `/api/providers/${p.id}/models/refresh`); toast(`${p.name} key 已存在本浏览器，获取到 ${r.models.length} 个模型，默认使用 ${r.default_model}`); }
+            catch (e) { toast(`${p.name} key 已存在本浏览器，但获取模型列表失败：${e.message}`); }
+            await loadProviders(); seatsSyncDefaults(); renderSettings(); return;
+          }
           try {
             const r = await api("PUT", `/api/providers/${p.id}/key`, { key: k }); keyInput.value = "";
             toast(r.refresh_error ? `${p.name} key 已保存，但获取模型列表失败：${r.refresh_error}` : `${p.name} key 已保存，获取到 ${r.models} 个模型，默认使用 ${r.default_model}`);
             await loadProviders(); seatsSyncDefaults(); renderSettings();
           } catch (e) { toast(e.message); }
         } }, "保存"),
-        p.key_configured ? h("button", { class: "btn small danger", onclick: async () => {
+        has ? h("button", { class: "btn small danger", onclick: async () => {
           if (!confirm(`删除 ${p.name} 的 key？`)) return;
+          if (MODE === "shared") { setLocalKey(p.id, ""); toast("已从本浏览器删除"); renderSettings(); return; }
           try { await api("DELETE", `/api/providers/${p.id}/key`); toast("已删除"); await loadProviders(); renderSettings(); } catch (e) { toast(e.message); }
         } }, "删除") : null),
       h("div", { class: "row", style: "margin-top:8px" }, refreshBtn, modelsInfo)));
@@ -1051,7 +1078,37 @@ function renderSettings() {
 }
 
 // ============================================================ 启动
+function renderMe() {
+  const box = $("#me-row"); box.innerHTML = "";
+  if (MODE !== "shared" || !ME) return;
+  box.append(h("div", { class: "me-row" }, h("span", { class: "grow" }, `👤 ${ME}`),
+    h("button", { class: "btn small", onclick: async () => { try { await api("POST", "/api/logout"); } catch (_) { /* 忽略 */ } location.reload(); } }, "退出")));
+}
+function showLogin() {
+  if ($("#login")) return;
+  const f = { access: h("input", { type: "password", placeholder: "访问密码（向主人要）", autocomplete: "off" }),
+    name: h("input", { placeholder: "你的名字（1~20 字）", autocomplete: "username" }),
+    pw: h("input", { type: "password", placeholder: "个人密码（至少 4 位）", autocomplete: "current-password" }) };
+  const err = h("div", { class: "err", style: "display:none" });
+  const form = h("form", { onsubmit: async (e) => {
+    e.preventDefault(); err.style.display = "none";
+    try {
+      const r = await api("POST", "/api/login", { access: f.access.value, name: f.name.value.trim(), password: f.pw.value });
+      if (r.created) alert(`欢迎 ${r.user}！账号已创建，请记住你的个人密码。\n下一步：到“设置”里填上你自己的 API key。`);
+      location.reload();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ""; }
+  } },
+    h("h2", {}, "AI 议事厅"),
+    h("div", { class: "hint" }, "第一次用：随便起个名字、设个密码就会自动注册。每个人的历史和 key 都是分开的，别人看不到。"),
+    f.access, f.name, f.pw, err, h("button", { class: "btn primary", type: "submit" }, "进入"));
+  document.body.append(h("div", { class: "login", id: "login" }, form));
+  f.access.focus();
+}
+
 (async function boot() {
+  try { const me = await api("GET", "/api/me"); MODE = me.mode; ME = me.user; } catch (_) { /* 旧版本服务 */ }
+  if (MODE === "shared" && !ME) { showLogin(); return; }
+  renderMe();
   await loadProviders();
   await loadHistory();
   const running = HISTORY.find((x) => x.status === "running");

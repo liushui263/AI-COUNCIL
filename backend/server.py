@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import http.cookies
 import ipaddress
 import json
 import logging
@@ -12,6 +13,7 @@ import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import auth as auth_mod
 from . import debate as debate_mod
 from . import export as export_mod
 from . import extract, providers, store
@@ -44,11 +46,55 @@ class ApiError(Exception):
         self.msg = msg
 
 
+# ---------------------------------------------------------------- 账号（仅共享模式）
+
+@route("GET", r"/api/me")
+def me(h, body):
+    h.send_json({"mode": "shared" if h.auth else "local", "user": h.user})
+
+
+@route("POST", r"/api/login")
+def login(h, body):
+    if not h.auth:
+        raise ApiError(404, "单机模式不需要登录")
+    b = body or {}
+    try:
+        token, created = h.auth.login(str(b.get("access") or ""), str(b.get("name") or ""),
+                                      str(b.get("password") or ""), h.real_ip())
+    except auth_mod.AuthError as e:
+        log.info("登录失败（%s）：%s", h.real_ip(), e.msg)
+        raise ApiError(e.status, e.msg) from None
+    user = h.auth.user_for(token)
+    log.info("%s %s（%s）", "新用户注册" if created else "登录", user, h.real_ip())
+    secure = "; Secure" if h.headers.get("X-Forwarded-Proto", "").lower() == "https" else ""
+    h.extra_headers = [("Set-Cookie", f"{auth_mod.COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; "
+                                      f"Max-Age={auth_mod.SESSION_TTL}{secure}")]
+    h.send_json({"ok": True, "user": user, "created": created})
+
+
+@route("POST", r"/api/logout")
+def logout(h, body):
+    if h.auth:
+        h.auth.logout(h.session_token())
+    h.extra_headers = [("Set-Cookie", f"{auth_mod.COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")]
+    h.send_json({"ok": True})
+
+
 # ---------------------------------------------------------------- providers
 
 @route("GET", r"/api/providers")
 def list_providers(h, body):
-    h.send_json(providers.public_list())
+    items = providers.public_list()
+    if h.auth:
+        # 共享模式：不透露本机 .env 里配了哪些 key；是否已配置由各人浏览器自己判断
+        for it in items:
+            it["key_configured"] = False
+    h.send_json(items)
+
+
+def _no_server_keys(h):
+    if h.auth:
+        raise ApiError(403, "共享模式下 key 只保存在你自己的浏览器里，服务器不保存")
 
 
 def _provider_or_404(pid: str) -> dict:
@@ -60,6 +106,7 @@ def _provider_or_404(pid: str) -> dict:
 
 @route("PUT", r"/api/providers/(?P<pid>[a-z0-9_-]+)/key")
 def put_key(h, body, pid):
+    _no_server_keys(h)
     p = _provider_or_404(pid)
     key = str((body or {}).get("key") or "").strip()
     if not key:
@@ -81,6 +128,7 @@ def put_key(h, body, pid):
 
 @route("DELETE", r"/api/providers/(?P<pid>[a-z0-9_-]+)/key")
 def delete_key(h, body, pid):
+    _no_server_keys(h)
     p = _provider_or_404(pid)
     store.set_key(p["env"], None)
     log.info("已删除 %s 的 key", pid)
@@ -91,7 +139,7 @@ def delete_key(h, body, pid):
 def refresh_models(h, body, pid):
     _provider_or_404(pid)
     try:
-        entry = providers.refresh_models(pid)
+        entry = providers.refresh_models(pid, h.keys)
     except ProviderError as e:
         raise ApiError(502, f"刷新模型列表失败：{e.msg}") from None
     h.send_json({"provider": pid, "models": entry["models"], "updated_at": entry["updated_at"],
@@ -124,7 +172,7 @@ def extract_text(h, body):
 @route("POST", r"/api/debates")
 def create_debate(h, body):
     try:
-        debate_id = manager.create(body or {})
+        debate_id = manager.create(body or {}, owner=h.user, keys=h.keys)
     except debate_mod.ValidationError as e:
         raise ApiError(400, str(e)) from None
     h.send_json({"debate_id": debate_id}, status=201)
@@ -132,22 +180,21 @@ def create_debate(h, body):
 
 @route("GET", r"/api/debates")
 def list_debates(h, body):
-    h.send_json(store.list_debates())
+    h.send_json(store.list_debates(h.user if h.auth else None))
 
 
-def _load_or_404(debate_id: str) -> dict:
+def _load_or_404(h, debate_id: str) -> dict:
+    """共享模式下只能访问自己的辩论；别人的一律当作不存在。"""
     run = manager.get_run(debate_id)
-    if run and run.active:
-        return run.debate
-    d = store.load_debate(debate_id)
-    if not d:
+    d = run.debate if run and run.active else store.load_debate(debate_id)
+    if not d or (h.auth and d.get("owner") != h.user):
         raise ApiError(404, "找不到这场辩论")
     return d
 
 
 @route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)")
 def get_debate(h, body, did):
-    d = _load_or_404(did)
+    d = _load_or_404(h, did)
     out = dict(d)
     out["active"] = manager.is_active(did)
     out["usage"] = store.usage_total(d)
@@ -156,6 +203,7 @@ def get_debate(h, body, did):
 
 @route("DELETE", r"/api/debates/(?P<did>[0-9a-fA-F-]+)")
 def delete_debate(h, body, did):
+    _load_or_404(h, did)
     try:
         ok = manager.delete(did)
     except debate_mod.ValidationError as e:
@@ -167,7 +215,7 @@ def delete_debate(h, body, did):
 
 @route("POST", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/cancel")
 def cancel_debate(h, body, did):
-    _load_or_404(did)
+    _load_or_404(h, did)
     if not manager.cancel(did):
         raise ApiError(409, "这场辩论已经结束，无需取消")
     h.send_json({"ok": True, "note": "已请求取消：当前轮完成后停止"})
@@ -175,9 +223,9 @@ def cancel_debate(h, body, did):
 
 @route("POST", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/synthesize")
 def synthesize(h, body, did):
-    _load_or_404(did)
+    _load_or_404(h, did)
     try:
-        manager.synthesize(did)
+        manager.synthesize(did, h.keys)
     except debate_mod.ValidationError as e:
         raise ApiError(409, str(e)) from None
     except KeyError:
@@ -188,9 +236,9 @@ def synthesize(h, body, did):
 @route("POST", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/resume")
 def resume_debate(h, body, did):
     """从历史重新开启：body {"retry_failed": bool, "extra_rounds": int}"""
-    _load_or_404(did)
+    _load_or_404(h, did)
     try:
-        manager.resume(did, body or {})
+        manager.resume(did, body or {}, h.keys)
     except debate_mod.ValidationError as e:
         raise ApiError(409, str(e)) from None
     except KeyError:
@@ -200,11 +248,8 @@ def resume_debate(h, body, did):
 
 @route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/events")
 def debate_events(h, body, did):
+    d = _load_or_404(h, did)
     run = manager.get_run(did)
-    if not run:
-        d = store.load_debate(did)
-        if not d:
-            raise ApiError(404, "找不到这场辩论")
     h.send_response(200)
     h.send_header("Content-Type", "text/event-stream; charset=utf-8")
     h.send_header("Cache-Control", "no-cache")
@@ -294,7 +339,7 @@ def export_markdown(d: dict) -> str:
 @route("GET", r"/api/debates/(?P<did>[0-9a-fA-F-]+)/export\.(?P<ext>md|docx|html)")
 def export_file(h, body, did, ext):
     """导出：md 原文；docx 为 Word；html 为打印页，打开后在浏览器里“另存为 PDF”。"""
-    d = _load_or_404(did)
+    d = _load_or_404(h, did)
     md = export_markdown(d)
     title = f"AI 议事厅：{d['topic']}"
     if ext == "md":
@@ -328,9 +373,16 @@ class Handler(BaseHTTPRequestHandler):
         log.warning("%s - %s", self.address_string(), fmt % args)
 
     # -- helpers
+    auth = None          # 共享模式下是 auth_mod.Auth
+    user = None          # 共享模式下当前登录的人
+    keys = None          # 共享模式下本次请求带来的 key（dict），单机模式为 None（用 .env）
+    extra_headers = ()
+
     def send_json(self, obj, status: int = 200):
         data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
+        for k, v in self.extra_headers:
+            self.send_header(k, v)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
@@ -374,15 +426,76 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return ip in getattr(self.server, "extra_clients", ())
 
+    # -- 共享模式
+    def real_ip(self) -> str:
+        """经 Cloudflare Tunnel 等本机转发进来时，用转发头里的真实来源 IP（用于登录限流）。"""
+        ip = self.client_address[0]
+        try:
+            loop = ipaddress.ip_address(ip.removeprefix("::ffff:")).is_loopback
+        except ValueError:
+            loop = False
+        if loop:
+            fwd = self.headers.get("CF-Connecting-IP") or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            if fwd.strip():
+                return fwd.strip()
+        return ip
+
+    def session_token(self):
+        c = http.cookies.SimpleCookie()
+        try:
+            c.load(self.headers.get("Cookie") or "")
+        except http.cookies.CookieError:
+            return None
+        m = c.get(auth_mod.COOKIE)
+        return m.value if m else None
+
+    def _request_keys(self) -> dict:
+        """共享模式：key 由浏览器放在 X-AIC-Keys 头里（base64 的 JSON），只在内存里用，不落盘、不记日志。"""
+        raw = self.headers.get("X-AIC-Keys")
+        if not raw:
+            return {}
+        try:
+            data = json.loads(base64.b64decode(raw).decode("utf-8"))
+        except ValueError:
+            raise ApiError(400, "X-AIC-Keys 格式不正确") from None
+        if not isinstance(data, dict):
+            raise ApiError(400, "X-AIC-Keys 格式不正确")
+        out = {}
+        for pid, key in data.items():
+            if isinstance(pid, str) and isinstance(key, str) and key.strip() and len(key) < 1000:
+                try:
+                    providers.get_provider(pid)
+                except ProviderError:
+                    continue
+                out[pid] = key.strip()
+        return out
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True  # 非浏览器请求；仍需要登录，Cookie 是 SameSite=Strict
+        return urllib.parse.urlsplit(origin).netloc.lower() == (self.headers.get("Host") or "").lower()
+
     def _dispatch(self, method: str):
         path = urllib.parse.urlsplit(self.path).path
+        self.auth = getattr(self.server, "auth", None)
+        self.extra_headers, self.user, self.keys = [], None, None  # 同一连接可能处理多个请求，逐个重置
         try:
-            if not self._client_ok():
-                raise ApiError(403, "只允许本机访问")
-            if not self._host_ok():
-                raise ApiError(403, "只允许通过 127.0.0.1 访问")
-            if method != "GET" and not self._origin_ok():
-                raise ApiError(403, "拒绝跨站请求")
+            if self.auth:
+                # 共享模式：谁都能连上来，但除了首页和登录，都要先登录
+                if method != "GET" and not self._same_origin():
+                    raise ApiError(403, "拒绝跨站请求")
+                self.user = self.auth.user_for(self.session_token())
+                if not self.user and path not in ("/", "/index.html", "/favicon.ico", "/api/me", "/api/login", "/api/logout"):
+                    raise ApiError(401, "请先登录")
+                self.keys = self._request_keys()
+            else:
+                if not self._client_ok():
+                    raise ApiError(403, "只允许本机访问")
+                if not self._host_ok():
+                    raise ApiError(403, "只允许通过 127.0.0.1 访问")
+                if method != "GET" and not self._origin_ok():
+                    raise ApiError(403, "拒绝跨站请求")
             if method == "GET" and path in ("/", "/index.html"):
                 return self._serve_index()
             if method == "GET" and path == "/favicon.ico":
@@ -456,9 +569,11 @@ def port_in_use(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def make_server(host: str = "127.0.0.1", port: int = 8000, extra_clients=()) -> Server:
+def make_server(host: str = "127.0.0.1", port: int = 8000, extra_clients=(), access_password: str | None = None) -> Server:
+    """access_password 不为空时进入共享模式（给朋友测试）：要登录，按人分开历史，key 由各人浏览器提供。"""
     srv = Server((host, port), Handler)
     srv.extra_clients = frozenset(extra_clients)
+    srv.auth = auth_mod.Auth(access_password) if access_password else None
     return srv
 
 

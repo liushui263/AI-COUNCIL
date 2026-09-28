@@ -211,7 +211,7 @@ def _num(v, cast, name, lo, hi, default):
     return x
 
 
-def validate(body: dict) -> dict:
+def validate(body: dict, keys: dict | None = None) -> dict:
     """校验 POST /api/debates 的输入，返回规范化后的配置；非法时抛 ValidationError（中文）。"""
     if not isinstance(body, dict):
         raise ValidationError("请求体必须是 JSON 对象")
@@ -237,7 +237,7 @@ def validate(body: dict) -> dict:
             prov = providers.get_provider(pid)
         except ProviderError:
             raise ValidationError(f"未知的 provider：{pid}") from None
-        if not providers.key_ok(pid) and prov["name"] not in missing_keys:
+        if not providers.key_ok(pid, keys) and prov["name"] not in missing_keys:
             missing_keys.append(prov["name"])
         model = str(rp.get("model") or "").strip() or providers.default_model(pid)
         role = str(rp.get("role") or "").strip()
@@ -263,7 +263,7 @@ def validate(body: dict) -> dict:
         sprov = providers.get_provider(spid)
     except ProviderError:
         raise ValidationError(f"未知的综合者 provider：{spid}") from None
-    if not providers.key_ok(spid):
+    if not providers.key_ok(spid, keys):
         raise ValidationError(f"综合者 {sprov['name']} 需要 key 但尚未配置，请先到设置页配置")
     smodel = str(syn.get("model") or "").strip() or providers.default_model(spid)
 
@@ -286,8 +286,10 @@ def validate(body: dict) -> dict:
 # ---------------------------------------------------------------- 运行中的辩论
 
 class Run:
-    def __init__(self, debate: dict):
+    def __init__(self, debate: dict, keys: dict | None = None):
         self.debate = debate
+        # 共享模式：本次运行用的 key（来自发起人的浏览器），只在内存里，不写进存档
+        self.keys = keys
         self.events: list = []
         self.cond = threading.Condition()
         self.cancel_flag = threading.Event()
@@ -312,8 +314,8 @@ class DebateManager:
 
     # -------- 对外接口
 
-    def create(self, body: dict) -> str:
-        cfg = validate(body)
+    def create(self, body: dict, owner: str | None = None, keys: dict | None = None) -> str:
+        cfg = validate(body, keys)
         debate_id = str(uuid.uuid4())
         debate = {
             "id": debate_id,
@@ -326,8 +328,10 @@ class DebateManager:
             "synthesis": None,
             "status": "running",
         }
+        if owner:
+            debate["owner"] = owner
         self._save(debate)
-        run = Run(debate)
+        run = Run(debate, keys)
         with self._lock:
             self._runs[debate_id] = run
         run.thread = threading.Thread(target=self._run_debate, args=(run,), daemon=True, name=f"debate-{debate_id[:8]}")
@@ -349,7 +353,7 @@ class DebateManager:
         run.cancel_flag.set()
         return True
 
-    def synthesize(self, debate_id: str) -> None:
+    def synthesize(self, debate_id: str, keys: dict | None = None) -> None:
         """对已结束/已取消的辩论（重新）生成综合报告，在后台运行，事件照常推送。"""
         if self.is_active(debate_id):
             raise ValidationError("辩论仍在进行中，请等待结束或先取消")
@@ -359,15 +363,15 @@ class DebateManager:
         if not any(m.get("status") == "ok" for r in debate.get("rounds", []) for m in r.get("messages", [])):
             raise ValidationError("还没有任何成功的发言，无法综合")
         syn = debate["config"]["synthesis"]
-        if not providers.key_ok(syn["provider"]):
+        if not providers.key_ok(syn["provider"], keys):
             raise ValidationError("综合者的 key 尚未配置，请先到设置页配置")
-        run = Run(debate)
+        run = Run(debate, keys)
         with self._lock:
             self._runs[debate_id] = run
         run.thread = threading.Thread(target=self._run_synthesis_only, args=(run,), daemon=True)
         run.thread.start()
 
-    def resume(self, debate_id: str, body: dict) -> None:
+    def resume(self, debate_id: str, body: dict, keys: dict | None = None) -> None:
         """从历史里重新开启一场辩论（总轮数不设上限）。
 
         body: retry_failed（重试失败的发言）、extra_rounds（再追加几轮交叉辩论）、
@@ -433,7 +437,7 @@ class DebateManager:
                                 "model": str(syn.get("model") or "").strip() or providers.default_model(str(syn["provider"]))}
 
         missing = sorted({providers.get_provider(p["provider"])["name"] for p in cfg["participants"]
-                          if not providers.key_ok(p["provider"])})
+                          if not providers.key_ok(p["provider"], keys)})
         if missing:
             raise ValidationError(f"以下 provider 的 key 尚未配置：{'、'.join(missing)}。请先到设置页配置")
         if user_input or atts:
@@ -445,7 +449,7 @@ class DebateManager:
         debate["status"] = "running"
         debate.pop("error", None)
         self._save(debate)
-        run = Run(debate)
+        run = Run(debate, keys)
         with self._lock:
             self._runs[debate_id] = run
         run.thread = threading.Thread(target=self._run_debate, args=(run, retry), daemon=True,
@@ -482,7 +486,7 @@ class DebateManager:
         try:
             res = providers.chat(msg["provider"], msg["model"], system, user,
                                  cfg["max_tokens"], cfg["temperature"], True, on_token, on_retry,
-                                 max_retries=cfg.get("max_retries"))
+                                 max_retries=cfg.get("max_retries"), keys=run.keys)
             text = (res.get("text") or "").strip()
             if not text:
                 raise ProviderError("模型返回了空内容")
@@ -555,19 +559,19 @@ class DebateManager:
             for f in [pool.submit(run_group, g) for g in groups.values()]:
                 f.result()
 
-    def _synth_candidates(self, d: dict) -> list:
+    def _synth_candidates(self, d: dict, keys: dict | None = None) -> list:
         """综合者候选：先用指定的综合者，失败再依次换参会者里其他（能用的）模型。"""
         syn = d["config"]["synthesis"]
         out = [(syn["provider"], syn["model"])]
         for p in d["config"]["participants"]:
             c = (p["provider"], p["model"])
-            if c not in out and providers.key_ok(p["provider"]):
+            if c not in out and providers.key_ok(p["provider"], keys):
                 out.append(c)
         return out
 
     def _synthesize(self, run: Run) -> bool:
         d = run.debate
-        cands = self._synth_candidates(d)
+        cands = self._synth_candidates(d, run.keys)
         by = f"{cands[0][0]}/{cands[0][1]}"
         d["synthesis"] = {"text": "", "by": by, "status": "running"}
         run.emit("synthesis_started", {"by": by})
@@ -590,7 +594,7 @@ class DebateManager:
                 run.emit("synthesis_retry", {"note": f"{errors[-1]}；改由 {by} 综合", "by": by})
             try:
                 res = providers.chat(pid, model, SYNTH_SYSTEM, user, max_tokens, temperature, True, on_token, on_retry,
-                                     max_retries=d["config"].get("max_retries"))
+                                     max_retries=d["config"].get("max_retries"), keys=run.keys)
                 text = (res.get("text") or "").strip()
                 if not text:
                     raise ProviderError("综合者返回了空内容")

@@ -519,6 +519,90 @@ class OfflineE2E(unittest.TestCase):
         new = d["rounds"][1]["messages"][2]
         self.assertEqual((new["participant"], new["model"], new["status"]), ("groq#2", "c", "ok"))
 
+    def test_23_shared_mode(self):
+        import base64
+        srv = server.make_server("127.0.0.1", 0, access_password="friends-pass-123")
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+
+        def req(method, path, body=None, cookie=None, keys=None, headers=None):
+            hd = {"Content-Type": "application/json", **(headers or {})}
+            if cookie:
+                hd["Cookie"] = cookie
+            if keys is not None:
+                hd["X-AIC-Keys"] = base64.b64encode(json.dumps(keys).encode()).decode()
+            data = json.dumps(body).encode() if body is not None else None
+            r = urllib.request.Request(base + path, data=data, method=method, headers=hd)
+            try:
+                with urllib.request.urlopen(r, timeout=30) as resp:
+                    raw = resp.read()
+                    return resp.status, (json.loads(raw) if raw and raw[:1] in b"[{" else raw), resp.headers
+            except urllib.error.HTTPError as e:
+                raw = e.read()
+                return e.code, json.loads(raw) if raw else None, e.headers
+
+        def login(name, pw, access="friends-pass-123", ip="1.1.1.1"):
+            st, r, hd = req("POST", "/api/login", {"access": access, "name": name, "password": pw},
+                            headers={"X-Forwarded-For": ip})
+            return st, r, (hd.get("Set-Cookie") or "").split(";")[0]
+
+        st, r, _ = req("GET", "/api/me")
+        self.assertEqual(r, {"mode": "shared", "user": None})
+        self.assertEqual(req("GET", "/api/debates")[0], 401)
+        self.assertEqual(login("alice", "pw1234", access="wrong")[0], 401)
+        st, r, alice = login("alice", "pw1234")
+        self.assertEqual((st, r["created"]), (200, True))
+        st, r, bob = login("Bob", "bobpw99")
+        self.assertEqual(st, 200)
+        self.assertEqual(login("ALICE", "nope")[0], 401)       # 名字已被占用，密码不对
+        self.assertEqual(login("alice", "pw1234")[1]["created"], False)
+        self.assertEqual(req("GET", "/api/me", cookie=alice)[1]["user"], "alice")
+
+        # 服务器不保存 key，也不透露本机 .env 配了什么，更不会把本机的 key 给别人用
+        self.assertEqual(req("PUT", "/api/providers/groq/key", {"key": KEY}, cookie=alice)[0], 403)
+        st, plist, _ = req("GET", "/api/providers", cookie=alice)
+        self.assertFalse(any(p["key_configured"] for p in plist))
+        body = {"topic": "朋友的辩论", "debate_rounds": 0, "participants": [
+            {"provider": "groq", "model": "a"}, {"provider": "gemini", "model": "b"}]}
+        st, r, _ = req("POST", "/api/debates", body, cookie=alice, keys={})
+        self.assertEqual(st, 400)
+        self.assertIn("尚未配置", r["error"])
+        st, r, _ = req("POST", "/api/debates", body, cookie=alice, keys={"groq": KEY, "gemini": KEY})
+        self.assertEqual(st, 201, r)
+        did = r["debate_id"]
+        st, raw, _ = req("GET", f"/api/debates/{did}/events", cookie=alice)
+        self.assertIn(b"debate_done", raw)
+        d = store.load_debate(did)
+        self.assertEqual(d["owner"], "alice")
+        self.assertEqual(d["status"], "done")
+
+        # 各看各的
+        st, lst, _ = req("GET", "/api/debates", cookie=alice)
+        self.assertEqual([x["id"] for x in lst], [did])
+        st, lst, _ = req("GET", "/api/debates", cookie=bob)
+        self.assertEqual(lst, [])
+        for m, path in [("GET", f"/api/debates/{did}"), ("GET", f"/api/debates/{did}/events"),
+                        ("GET", f"/api/debates/{did}/export.md"), ("DELETE", f"/api/debates/{did}"),
+                        ("POST", f"/api/debates/{did}/resume")]:
+            self.assertEqual(req(m, path, {} if m == "POST" else None, cookie=bob)[0], 404, path)
+        self.assertEqual(req("GET", f"/api/debates/{did}", cookie=alice)[0], 200)
+
+        # key 不落盘
+        for f in store.DATA_DIR.rglob("*"):
+            if f.is_file():
+                self.assertNotIn(KEY.encode(), f.read_bytes(), str(f))
+        # 跨站写请求被拒；登录失败太多次被限流
+        self.assertEqual(req("POST", "/api/debates", body, cookie=alice, headers={"Origin": "https://evil.example.com"})[0], 403)
+        for _ in range(10):
+            login("alice", "badpw", ip="9.9.9.9")
+        self.assertEqual(login("alice", "pw1234", ip="9.9.9.9")[0], 429)
+        self.assertEqual(login("alice", "pw1234", ip="8.8.8.8")[0], 200)
+        # 退出后会话失效
+        req("POST", "/api/logout", cookie=bob)
+        self.assertEqual(req("GET", "/api/debates", cookie=bob)[0], 401)
+
     def test_16_quote_trim(self):
         u = debate.cross_user("t", [{"participant": "a", "model": "m", "role": "", "text": "字" * 5000}])
         self.assertLess(len(u), 3400)

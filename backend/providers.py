@@ -144,18 +144,22 @@ def get_provider(provider_id: str) -> dict:
     return p
 
 
-def key_for(provider_id: str) -> str:
+def key_for(provider_id: str, keys: dict | None = None) -> str:
+    """keys 不为 None 时（共享模式）只用请求里带来的 key（来自用户自己的浏览器），不读本机 .env。"""
+    if keys is not None:
+        get_provider(provider_id)
+        return str(keys.get(provider_id) or "")
     return store.get_key(get_provider(provider_id)["env"])
 
 
-def key_configured(provider_id: str) -> bool:
-    return bool(key_for(provider_id))
+def key_configured(provider_id: str, keys: dict | None = None) -> bool:
+    return bool(key_for(provider_id, keys))
 
 
-def key_ok(provider_id: str) -> bool:
+def key_ok(provider_id: str, keys: dict | None = None) -> bool:
     """需要 key 的 provider 必须已配置 key；不需要的总是 OK。"""
     p = get_provider(provider_id)
-    return (not p["need_key"]) or key_configured(provider_id)
+    return (not p["need_key"]) or key_configured(provider_id, keys)
 
 
 # 模型会频繁上下线，内置默认值很快过期；刷新过模型列表后按下面的规则从列表里挑一个。
@@ -646,14 +650,14 @@ _CHAT_BY_KIND = {"openai": _chat_openai, "gemini": _chat_gemini, "anthropic": _c
 
 def chat(provider_id: str, model: str, system: str, user: str,
          max_tokens: int, temperature: float, stream: bool,
-         on_token=None, on_retry=None, max_retries: int | None = None) -> dict:
+         on_token=None, on_retry=None, max_retries: int | None = None, keys: dict | None = None) -> dict:
     """返回 {"text": str, "usage": {"prompt_tokens": int, "completion_tokens": int} | None}
 
     on_retry(msg, wait)：发生重试前回调，wait 为等待秒数（流式输出已发出的内容需要前端清空重来）。
     max_retries：限流/过载/网络错误最多重试几次（默认 DEFAULT_RETRIES）；仍失败就抛错，由调用方交给下一位。
     """
     p = get_provider(provider_id)
-    key = key_for(provider_id)
+    key = key_for(provider_id, keys)
     if p["need_key"] and not key:
         raise ProviderError(f"{p['name']} 未配置 key，请到设置页配置")
     model = (model or "").strip() or default_model(provider_id)
@@ -712,9 +716,9 @@ def chat(provider_id: str, model: str, system: str, user: str,
 
 # ---------------------------------------------------------------- 模型列表刷新
 
-def list_models(provider_id: str) -> list:
+def list_models(provider_id: str, keys: dict | None = None) -> list:
     p = get_provider(provider_id)
-    key = key_for(provider_id)
+    key = key_for(provider_id, keys)
     if p["need_key"] and not key:
         raise ProviderError(f"{p['name']} 未配置 key，无法获取模型列表")
     base = p["base_url"].rstrip("/")
@@ -769,8 +773,8 @@ def list_models(provider_id: str) -> list:
     return out
 
 
-def refresh_models(provider_id: str) -> dict:
-    models = list_models(provider_id)
+def refresh_models(provider_id: str, keys: dict | None = None) -> dict:
+    models = list_models(provider_id, keys)
     return store.cache_models(provider_id, models)
 
 

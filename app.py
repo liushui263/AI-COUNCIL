@@ -25,6 +25,8 @@ def main() -> None:
     ap.add_argument("--debug", action="store_true", help="输出调试日志")
     ap.add_argument("--host", default=os.environ.get("AI_COUNCIL_HOST"),
                     help="监听地址，默认 127.0.0.1；在 WSL 里默认 0.0.0.0（仍只接受 Windows 本机的连接）")
+    ap.add_argument("--shared", action="store_true",
+                    help="共享模式（给朋友测试）：需要访问密码登录，每人历史分开，key 只存在各人浏览器里")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
@@ -32,6 +34,13 @@ def main() -> None:
 
     # WSL2 的 localhost 转发对只监听 127.0.0.1 的程序不可靠，Windows 浏览器会收到 ERR_EMPTY_RESPONSE。
     # 所以在 WSL 里默认监听 0.0.0.0，但只放行本机和 Windows 主机（默认网关）发来的连接。
+    access = None
+    if args.shared:
+        access = os.environ.get("AI_COUNCIL_ACCESS_PASSWORD") or store.get_key("AI_COUNCIL_ACCESS_PASSWORD")
+        if not access or len(access) < 8:
+            sys.exit("共享模式需要设置至少 8 位的访问密码：在 .env 里加一行 AI_COUNCIL_ACCESS_PASSWORD=你的密码，"
+                     "或者设置同名环境变量。把这个密码告诉朋友。")
+
     wsl = server.is_wsl()
     host = args.host or ("0.0.0.0" if wsl else HOST)
     extra = []
@@ -51,7 +60,7 @@ def main() -> None:
             errors.append(f"{port}：已被占用（可能是上次启动的 AI 议事厅还没关，包括在 WSL 里启动的那份）")
             continue
         try:
-            httpd = server.make_server(host, port, extra)
+            httpd = server.make_server(host, port, extra, access_password=access)
             break
         except OSError as e:
             errors.append(f"{port or '系统分配的端口'}：无法监听（{e}；Windows 上可能是系统保留端口，"
@@ -61,7 +70,7 @@ def main() -> None:
     port = httpd.server_address[1]
     if port != ports[0]:
         print(f"注意：端口 {errors[0]}，已改用 {port}", flush=True)
-    if extra or host not in ("127.0.0.1", "localhost", "::1"):
+    if not args.shared and (extra or host not in ("127.0.0.1", "localhost", "::1")):
         logging.info("监听 %s:%s，只接受本机%s的连接", host, port, f"和 Windows 主机 {extra[0]} " if extra else "")
 
     # 另一份实例可能还在跑（并共用 data/），这时不能把它进行中的辩论标记为中断
@@ -69,7 +78,10 @@ def main() -> None:
     if n:
         logging.info("有 %d 场上次未完成的辩论，已标记为 interrupted", n)
 
-    providers.refresh_configured_in_background()
+    if args.shared:
+        logging.info("共享模式：访问密码已设置；朋友用自己的 key（只存在他们的浏览器里），本机 .env 里的 key 不会给别人用")
+    else:
+        providers.refresh_configured_in_background()
 
     url = f"http://{HOST}:{port}"
     print(f"AI 议事厅已启动：{url}  （Ctrl+C 退出）", flush=True)

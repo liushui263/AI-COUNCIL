@@ -182,8 +182,8 @@ def delete_debate(debate_id: str) -> bool:
         return False
 
 
-def list_debates() -> list:
-    """历史列表（按创建时间倒序），只返回摘要。"""
+def list_debates(owner: str | None = None) -> list:
+    """历史列表（按创建时间倒序），只返回摘要。owner 给定时（共享模式）只列这个人的。"""
     with _lock:
         _ensure_dirs()
         items = []
@@ -191,6 +191,8 @@ def list_debates() -> list:
             try:
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
+                continue
+            if owner is not None and d.get("owner") != owner:
                 continue
             items.append({
                 "id": d.get("id"),

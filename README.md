@@ -13,7 +13,7 @@ python3 app.py          # Windows：python app.py
 ```
 
 启动后会自动打开浏览器；也可以手动访问 <http://127.0.0.1:8000>。
-默认端口 8000，被占用时自动改用 8001、8002…（启动窗口会显示实际地址）。可选参数：`--port 8080` 指定端口，`--no-browser` 不自动开浏览器，`--debug` 输出调试日志，`--host` 指定监听地址。
+默认端口 8000，被占用时自动改用 8001、8002…（启动窗口会显示实际地址）。可选参数：`--port 8080` 指定端口，`--no-browser` 不自动开浏览器，`--debug` 输出调试日志，`--host` 指定监听地址，`--shared` 共享模式（见“给朋友测试”）。
 
 ### 在 WSL 里运行
 
@@ -74,11 +74,55 @@ PDF 只能提取文字层：扫描件（图片）和加密 PDF 会提示无法�
 付费 provider（DeepSeek、OpenAI、Anthropic、xAI）费用走你自己的账户，选中时页面会有黄色提示。
 注意：Claude Pro / Claude Code 订阅不含 API 额度，Anthropic 需要单独开 API 账单。
 
+## 给朋友测试（共享模式）
+
+默认是单机模式，只有你自己在本机用。想让朋友也来用，就用共享模式启动：
+
+- 每个人进来要输入**访问密码**（你告诉朋友），再用自己的名字和密码登录；名字第一次用就自动注册。
+- **每人的历史记录分开**，页面上谁也看不到别人的辩论；**设置页也是各人自己的**。
+- **朋友用自己的 key**：key 只保存在他们自己的浏览器里，发起辩论时随请求发到你的电脑，只在辩论进行期间留在内存里，不写硬盘、不记日志。
+  你 `.env` 里的 key 在共享模式下**不会给任何人用**（你自己在共享模式里也要在设置页填一次）。
+- 同一 IP 10 分钟内登录失败 10 次会被暂时锁住；登录状态保存在内存里，重启程序后需要重新登录。
+- 注意：辩论存档保存在你电脑的 `data/debates/` 里（带 owner 字段），你作为主机能在硬盘上看到这些文件，页面上看不到。
+
+### 1. 设访问密码并启动
+
+在 `.env` 里加一行（至少 8 位）：
+
+```
+AI_COUNCIL_ACCESS_PASSWORD=换成你自己的密码
+```
+
+然后：
+
+```bash
+python app.py --shared --port 8000
+```
+
+### 2. 让朋友连进来（二选一）
+
+**Tailscale（推荐，只有你邀请的人能连）**
+
+1. 你和朋友都装 Tailscale（<https://tailscale.com/download>）并登录；在 Tailscale 管理页把你这台电脑 **Share** 给朋友（或邀请他们加入你的 tailnet）。
+2. 在你电脑上运行 `tailscale serve --bg 8000`，它会给出一个 `https://你的电脑名.xxx.ts.net` 地址（只有 tailnet 里的人能访问，自带 HTTPS）。
+3. 把这个地址和访问密码发给朋友。
+
+不想用 `tailscale serve` 的话，也可以 `python app.py --shared --host 0.0.0.0`，朋友访问 `http://你的Tailscale IP:8000`（流量由 Tailscale 加密；Windows 防火墙弹窗时允许专用网络）。
+
+**Cloudflare Tunnel（不用朋友装任何东西）**
+
+1. 安装 cloudflared（<https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/>）。
+2. 运行 `cloudflared tunnel --url http://127.0.0.1:8000`，它会给出一个 `https://随机名字.trycloudflare.com` 地址。
+3. 把地址和访问密码发给朋友。这个地址是公开的，任何拿到链接的人都能看到登录页，所以访问密码要设得够长；
+   另外 HTTPS 在 Cloudflare 那一端解密，朋友的 key 会经过 Cloudflare。每次重启 cloudflared 地址会变。
+
+测试完关掉 cloudflared 或运行 `tailscale serve reset`，再用 `python app.py`（不带 `--shared`）就回到单机模式。
+
 ## 安全
 
 - key 只保存在本目录的 `.env` 文件里；页面和所有接口只显示“已配置/未配置”，日志里不记录 key。
 - **不要把 `.env` 发给任何人**。`.env` 和 `data/` 已在 `.gitignore` 里。
-- 服务默认只监听 `127.0.0.1`（WSL 里见上文），只接受本机连接，并拒绝来自其他网站的跨站请求。
+- 单机模式下服务只监听 `127.0.0.1`（WSL 里见上文），只接受本机连接，并拒绝来自其他网站的跨站请求；共享模式见上文，需要登录才能用。
 - 本应用除了你选择的 provider 之外，不向任何地址发请求。
 
 ## 目录
@@ -92,6 +136,7 @@ ai-council/
 │   ├── providers.py       # 8 家 provider 适配器（统一 chat 接口）
 │   ├── extract.py         # 上传文档提取文字（txt/md/docx/pdf，纯标准库）
 │   ├── export.py          # 导出 Word（.docx）和打印页（另存为 PDF）
+│   ├── auth.py            # 共享模式的登录（访问密码 + 个人账号）
 │   └── store.py           # .env、JSON 存档、模型列表缓存
 ├── frontend/index.html    # 单文件前端（无框架、无 CDN）
 ├── data/                  # 辩论存档与模型缓存（自动生成）
