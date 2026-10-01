@@ -1,5 +1,7 @@
 # AI 议事厅（AI Debate Sandbox）
 
+[English](#english) · MIT License · 欢迎贡献，见 [CONTRIBUTING.md](CONTRIBUTING.md)
+
 输入一个主题，让多个 AI 辩论几轮，最后输出一份标出**共识与分歧**的综合报告。
 在你自己的电脑上本地运行，API Key 只存本机 `.env`。完整规格见 [docs/spec.md](docs/spec.md)。
 
@@ -8,7 +10,8 @@
 需要 Python 3.9 或更高版本，**不用 pip install 任何东西**。
 
 ```bash
-cd ai-council
+git clone https://github.com/liushui263/AI-COUNCIL.git
+cd AI-COUNCIL
 python3 app.py          # Windows：python app.py
 ```
 
@@ -128,7 +131,7 @@ python app.py --shared --port 8000
 ## 目录
 
 ```
-ai-council/
+AI-COUNCIL/
 ├── app.py                 # 入口
 ├── backend/
 │   ├── server.py          # HTTP 路由 + SSE
@@ -161,3 +164,19 @@ python3 smoke_test.py gemini                    # 真实调用某个已配好 ke
 - 默认最大输出长度 4096（规格为 1500），综合报告至少 4096，避免推理模型和四个章节被截断。
 - OpenRouter 和 xAI 的默认模型是占位值，刷新模型列表后会自动更新。
 - 429/503 的重试会按服务端提示等待（规格是 1s、4s 两次），见“免费档的限流”；综合者失败时会自动换人。
+
+## English
+
+**AI Council** lets several AI models debate a topic for a few rounds, then writes a combined report that marks where they agree and where they disagree.
+It runs on your own computer with Python 3.9+ and the standard library only (no `pip install`). API keys stay in a local `.env` file.
+
+```bash
+git clone https://github.com/liushui263/AI-COUNCIL.git
+cd AI-COUNCIL
+python3 app.py            # Windows: python app.py
+```
+
+It opens <http://127.0.0.1:8000>. Add at least one key on the Settings page (Gemini, Groq, OpenRouter and Pollinations have free tiers), then start a debate.
+Supported providers: Gemini, Groq, OpenRouter, Pollinations, DeepSeek, OpenAI, Anthropic and xAI. Debates can be exported as Markdown, Word or PDF.
+
+Run the offline tests with `python3 -m unittest discover -s tests -t .`. See [CONTRIBUTING.md](CONTRIBUTING.md) to contribute, and [LICENSE](LICENSE) for the MIT license.
